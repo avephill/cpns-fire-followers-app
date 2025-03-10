@@ -75,13 +75,13 @@ ui <- fluidPage(
                 class = "panel-heading",
                 h4(
                   class = "panel-title",
-                  a("Species Richness Plot",
+                  a("Species Richness Plot (click to expand)",
                     `data-toggle` = "collapse", href = "#collapseOne"
                   )
                 )
               ),
               div(
-                id = "collapseOne", class = "panel-collapse collapse in", # open by default
+                id = "collapseOne", class = "panel-collapse collapse", # starts collapsed
                 div(
                   class = "panel-body",
                   plotOutput("richnessPlot")
@@ -95,13 +95,13 @@ ui <- fluidPage(
                 class = "panel-heading",
                 h4(
                   class = "panel-title",
-                  a("Fire Insights Map",
+                  a("Fire Insights Map (click to expand)",
                     `data-toggle` = "collapse", href = "#collapseTwo"
                   )
                 )
               ),
               div(
-                id = "collapseTwo", class = "panel-collapse collapse",
+                id = "collapseTwo", class = "panel-collapse collapse", # starts collapsed
                 div(
                   class = "panel-body",
                   leafletOutput("map", height = 600)
