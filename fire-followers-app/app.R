@@ -50,7 +50,7 @@ ui <- fluidPage(
     textInput("fire", "Selected Fire", value = "")
   ),
 
-  # Tabset now has just two tabs: 'Select Fire' and 'Species Richness'
+  # Tabset: 'Select Fire' and 'Species Richness'
   tabsetPanel(
     id = "tabs",
     tabPanel(
@@ -61,11 +61,27 @@ ui <- fluidPage(
       "Species Richness",
       sidebarLayout(
         sidebarPanel(
-          # Render sliderInput dynamically with fire alarm date in the label
-          uiOutput("time_range_ui")
+          # Render time slider dynamically with fire alarm date in the label.
+          uiOutput("time_range_ui"),
+          # Single selectizeInput for taxonomic filtering across all levels.
+          selectizeInput("taxa_filter", "Taxa Filter",
+            choices = NULL,
+            options = list(
+              placeholder = "Search by class, family, genus, or species",
+              render = I('{
+                 option: function(item, escape) {
+                   return "<div>" + item.label + "</div>";
+                 },
+                 item: function(item, escape) {
+                   return "<div>" + item.label + "</div>";
+                 }
+               }')
+            ),
+            multiple = FALSE
+          )
         ),
         mainPanel(
-          # Collapsible panels using Bootstrap collapse
+          # Collapsible panels using Bootstrap collapse.
           div(
             class = "panel-group", id = "accordion",
             # Panel for species richness plot
@@ -117,7 +133,7 @@ ui <- fluidPage(
 
 # --- Define the Server -------------------------------------------------------
 server <- function(input, output, session) {
-  # Observer to disable/enable tabs based on fire selection
+  # Observer to disable/enable the Species Richness tab based on fire selection.
   observe({
     if (is.null(input$fire) || input$fire == "") {
       shinyjs::runjs("$('#tabs li a:contains(\"Species Richness\")').addClass('disabled').css({'pointer-events': 'none', 'opacity': '0.5'});")
@@ -142,8 +158,8 @@ server <- function(input, output, session) {
     new_end <- alarm_date + (365 * 4)
     sliderInput("time_range",
       label = HTML(paste(
-        "Select date range for species richness", "<br>",
-        "<span style='font-weight:normal; font-style:italic;'>Fire time:", alarm_date, "</span>"
+        "Select date range for observations", "<br>",
+        "<span style='font-weight:normal; font-style:italic;'>Fire alarm date:", alarm_date, "</span>"
       )),
       min = as.Date("2015-01-01"),
       max = Sys.Date(),
@@ -153,19 +169,56 @@ server <- function(input, output, session) {
     )
   })
 
-  # Reactive: Get all fires (one record per fire, using the largest fire by GIS_ACRES)
+  # Update the taxa_filter selectizeInput with combined choices.
+  observe({
+    req(input$fire)
+    selected_fire_name <- input$fire
+    # Query distinct values for each taxonomic level.
+    classes <- tbl(con, "gbif_frap") %>%
+      filter(FIRE_NAME == selected_fire_name) %>%
+      distinct(taxon_class_name) %>%
+      collect() %>%
+      pull(taxon_class_name)
+    families <- tbl(con, "gbif_frap") %>%
+      filter(FIRE_NAME == selected_fire_name) %>%
+      distinct(taxon_family_name) %>%
+      collect() %>%
+      pull(taxon_family_name)
+    genera <- tbl(con, "gbif_frap") %>%
+      filter(FIRE_NAME == selected_fire_name) %>%
+      distinct(taxon_genus_name) %>%
+      collect() %>%
+      pull(taxon_genus_name)
+    species <- tbl(con, "gbif_frap") %>%
+      filter(FIRE_NAME == selected_fire_name) %>%
+      distinct(taxon_species_name) %>%
+      collect() %>%
+      pull(taxon_species_name)
+
+    # Create a combined list with level prefixes.
+    # Labels are of the form "Alnus <span style='color:gray;'>Genus</span>".
+    choices <- c(
+      setNames(paste0("class|", classes), paste0(classes, " <span style='color:gray;'>Class</span>")),
+      setNames(paste0("family|", families), paste0(families, " <span style='color:gray;'>Family</span>")),
+      setNames(paste0("genus|", genera), paste0(genera, " <span style='color:gray;'>Genus</span>")),
+      setNames(paste0("species|", species), paste0(species, " <span style='color:gray;'>Species</span>"))
+    )
+    updateSelectizeInput(session, "taxa_filter",
+      choices = choices, server = TRUE
+    )
+  })
+
+  # Reactive: Get all fires (one record per fire, using the largest fire by GIS_ACRES).
   all_fires <- reactive({
     print("all_fires: Retrieving all fire data.")
     fires_info <- tbl(con, "frap") %>%
       group_by(FIRE_NAME) %>%
       slice_max(GIS_ACRES, with_ties = FALSE) %>%
       collect()
-
     fires_sf <- fires_info %>%
-      mutate(geometry = st_as_sfc(geom_wkt, crs = 4326)) %>%
+      mutate(geometry = st_as_sfc(geom_wkt, crs = 4326) %>% st_zm(drop = TRUE)) %>%
       st_as_sf() %>%
       st_make_valid()
-
     fires_sf
   })
 
@@ -173,7 +226,7 @@ server <- function(input, output, session) {
   output$fireMap <- renderLeaflet({
     print("output$fireMap: Rendering fire centroids map.")
     req(all_fires())
-    # Compute centroids of all fire polygons
+    # Compute centroids of all fire polygons.
     fire_centroids <- st_centroid(all_fires())
     leaflet() %>%
       addTiles() %>%
@@ -184,7 +237,7 @@ server <- function(input, output, session) {
       )
   })
 
-  # Update the hidden input 'fire' when a fire centroid is clicked
+  # Update the hidden input 'fire' when a fire centroid is clicked.
   observeEvent(input$fireMap_marker_click, {
     click <- input$fireMap_marker_click
     selected_fire_name <- click$id
@@ -202,35 +255,50 @@ server <- function(input, output, session) {
       filter(FIRE_NAME == selected_fire_name) %>%
       slice_max(GIS_ACRES, with_ties = FALSE) %>%
       collect()
-
     print("selected_fire: Fire info collected from DuckDB.")
-
     fire_sf <- fire_info %>%
-      mutate(geometry = st_as_sfc(geom_wkt, crs = 4326)) %>%
+      mutate(geometry = st_as_sfc(geom_wkt, crs = 4326) %>% st_zm(drop = TRUE)) %>%
       st_as_sf() %>%
       st_make_valid()
-
     if (st_geometry_type(fire_sf) == "GEOMETRYCOLLECTION") {
       fire_sf <- fire_sf %>%
         mutate(geometry = st_union(st_collection_extract(geometry, "POLYGON")))
     }
-
     print("selected_fire: Converted fire info to sf object.")
     fire_sf
   })
 
-  # Reactive: Retrieve species observation points for the selected fire.
+  # Reactive: Retrieve species observation points for the selected fire,
+  # further filtering by the taxa_filter if specified.
   species_points <- reactive({
     req(input$fire)
     print(paste("species_points: Retrieving species observations for fire =", input$fire))
-    selected_fire_name <- input$fire
-    spp_df <- tbl(con, "gbif_frap") %>%
+    selected_fire_name_local <- input$fire
+    spp_query <- tbl(con, "gbif_frap") %>%
       filter(
-        FIRE_NAME == selected_fire_name,
+        FIRE_NAME == selected_fire_name_local,
         !is.na(latitude),
         !is.na(longitude)
+      )
+    if (!is.null(input$taxa_filter) && input$taxa_filter != "") {
+      split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
+      level <- split_val[1]
+      value <- split_val[2]
+      if (level == "class") {
+        spp_query <- spp_query %>% filter(taxon_class_name == value)
+      } else if (level == "family") {
+        spp_query <- spp_query %>% filter(taxon_family_name == value)
+      } else if (level == "genus") {
+        spp_query <- spp_query %>% filter(taxon_genus_name == value)
+      } else if (level == "species") {
+        spp_query <- spp_query %>% filter(taxon_species_name == value)
+      }
+    }
+    spp_df <- spp_query %>%
+      select(
+        id, latitude, longitude, observed_on, scientific_name,
+        taxon_class_name, taxon_family_name, taxon_genus_name, taxon_species_name
       ) %>%
-      select(id, latitude, longitude, observed_on, scientific_name) %>%
       collect()
     print(paste("species_points: Number of species observations retrieved =", nrow(spp_df)))
     if (nrow(spp_df) == 0) {
@@ -249,22 +317,13 @@ server <- function(input, output, session) {
     spp_sf <- species_points()
     req(fire_sf, spp_sf)
     fire_bbox <- st_bbox(fire_sf)
-    print(paste(
-      "species_grid: Fire bounding box =",
-      paste(names(fire_bbox), round(fire_bbox, 2), collapse = ", ")
-    ))
-    # Use fixed grid resolution of 20 cells along the longest dimension
-    cell_size <- max(
-      fire_bbox$xmax - fire_bbox$xmin,
-      fire_bbox$ymax - fire_bbox$ymin
-    ) / 20
+    print(paste("species_grid: Fire bounding box =", paste(names(fire_bbox), round(fire_bbox, 2), collapse = ", ")))
+    cell_size <- max(fire_bbox$xmax - fire_bbox$xmin, fire_bbox$ymax - fire_bbox$ymin) / 20
     print(paste("species_grid: Calculated cell size =", cell_size))
     grid <- st_make_grid(fire_sf, cellsize = cell_size, square = TRUE)
-
     grid_sf <- st_sf(geometry = grid) %>%
       st_make_valid() %>%
       st_intersection(fire_sf %>% select(geometry))
-
     if ("GEOMETRYCOLLECTION" %in% unique(st_geometry_type(grid_sf))) {
       grid_sf <- grid_sf %>%
         rowwise() %>%
@@ -275,7 +334,6 @@ server <- function(input, output, session) {
         )) %>%
         ungroup()
     }
-
     print(paste("species_grid: Number of grid cells after intersection =", nrow(grid_sf)))
     counts <- lengths(st_intersects(grid_sf, spp_sf))
     grid_sf$count <- counts
@@ -283,18 +341,15 @@ server <- function(input, output, session) {
     grid_sf
   })
 
-  # --- Fire Insights Map (now shown within the Species Richness tab) ------
+  # --- Fire Insights Map (shown within the Species Richness tab) ------
   output$map <- renderLeaflet({
     req(selected_fire(), species_grid())
     print("output$map: Rendering fire insights map.")
     fire_sf <- selected_fire()
     centroid <- st_centroid(fire_sf$geometry)
     coords <- st_coordinates(centroid)
-    grid_sf <- species_grid() %>%
-      mutate(log_count = log1p(count))
-
+    grid_sf <- species_grid() %>% mutate(log_count = log1p(count))
     pal <- colorNumeric("YlOrRd", domain = grid_sf$log_count)
-
     leaflet() %>%
       addTiles() %>%
       setView(lng = coords[1], lat = coords[2], zoom = 10) %>%
@@ -317,29 +372,47 @@ server <- function(input, output, session) {
       )
   })
 
-  ## --- Species Richness Data and Plot ---------------------------------------
+  # --- Species Richness Data and Plot ---------------------------------------
   richness_data <- reactive({
     print("richness_data: Calculating species richness data.")
     fire_sf <- selected_fire()
     req(fire_sf)
-
     fire_date <- as.Date(fire_sf$ALARM_DATE[1])
     print(paste("richness_data: Fire alarm date =", fire_date))
-
     start_date <- as.Date(input$time_range[1])
     end_date <- as.Date(input$time_range[2])
     print(paste("richness_data: Selected date range =", start_date, "to", end_date))
+    selected_fire_name_local <- input$fire
 
-    selected_fire_name <- input$fire
+    # Helper function to apply the taxa_filter.
+    apply_taxon_filter <- function(qry) {
+      if (!is.null(input$taxa_filter) && input$taxa_filter != "") {
+        split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
+        level <- split_val[1]
+        value <- split_val[2]
+        if (level == "class") {
+          qry <- qry %>% filter(taxon_class_name == value)
+        } else if (level == "family") {
+          qry <- qry %>% filter(taxon_family_name == value)
+        } else if (level == "genus") {
+          qry <- qry %>% filter(taxon_genus_name == value)
+        } else if (level == "species") {
+          qry <- qry %>% filter(taxon_species_name == value)
+        }
+      }
+      qry
+    }
 
     # Total species richness pre-fire.
     total_pre <- if (start_date < fire_date) {
-      tbl(con, "gbif_frap") %>%
+      qry <- tbl(con, "gbif_frap") %>%
         filter(
-          FIRE_NAME == selected_fire_name,
+          FIRE_NAME == selected_fire_name_local,
           observed_on >= start_date,
           observed_on < fire_date
-        ) %>%
+        )
+      qry <- apply_taxon_filter(qry)
+      qry %>%
         summarize(richness = n_distinct(scientific_name)) %>%
         collect() %>%
         pull(richness)
@@ -350,12 +423,14 @@ server <- function(input, output, session) {
 
     # Total species richness post-fire.
     total_post <- if (end_date >= fire_date) {
-      tbl(con, "gbif_frap") %>%
+      qry <- tbl(con, "gbif_frap") %>%
         filter(
-          FIRE_NAME == selected_fire_name,
+          FIRE_NAME == selected_fire_name_local,
           observed_on >= fire_date,
           observed_on <= end_date
-        ) %>%
+        )
+      qry <- apply_taxon_filter(qry)
+      qry %>%
         summarize(richness = n_distinct(scientific_name)) %>%
         collect() %>%
         pull(richness)
@@ -367,46 +442,76 @@ server <- function(input, output, session) {
     total_df <- data.frame(
       Period   = c("Pre-fire", "Post-fire"),
       Richness = c(total_pre, total_post)
-    ) %>%
-      mutate(Period = factor(Period, levels = c("Pre-fire", "Post-fire")))
+    ) %>% mutate(Period = factor(Period, levels = c("Pre-fire", "Post-fire")))
 
-    # Species richness breakdown by taxon_class_name.
-    class_pre <- if (start_date < fire_date) {
-      tbl(con, "gbif_frap") %>%
+    # Total observation counts pre-fire.
+    obs_pre <- if (start_date < fire_date) {
+      qry <- tbl(con, "gbif_frap") %>%
         filter(
-          FIRE_NAME == selected_fire_name,
+          FIRE_NAME == selected_fire_name_local,
           observed_on >= start_date,
           observed_on < fire_date
-        ) %>%
-        group_by(taxon_class_name) %>%
-        summarize(Richness = n_distinct(scientific_name)) %>%
-        collect()
+        )
+      qry <- apply_taxon_filter(qry)
+      qry %>%
+        summarize(obs = n()) %>%
+        collect() %>%
+        pull(obs)
     } else {
-      data.frame(taxon_class_name = character(), Richness = integer())
+      0
     }
-    class_pre$Period <- "Pre-fire"
-
-    class_post <- if (end_date >= fire_date) {
-      tbl(con, "gbif_frap") %>%
+    obs_post <- if (end_date >= fire_date) {
+      qry <- tbl(con, "gbif_frap") %>%
         filter(
-          FIRE_NAME == selected_fire_name,
+          FIRE_NAME == selected_fire_name_local,
           observed_on >= fire_date,
           observed_on <= end_date
-        ) %>%
-        group_by(taxon_class_name) %>%
-        summarize(Richness = n_distinct(scientific_name)) %>%
-        collect()
+        )
+      qry <- apply_taxon_filter(qry)
+      qry %>%
+        summarize(obs = n()) %>%
+        collect() %>%
+        pull(obs)
     } else {
-      data.frame(taxon_class_name = character(), Richness = integer())
+      0
     }
-    class_post$Period <- "Post-fire"
+    obs_df <- data.frame(
+      Period = c("Pre-fire", "Post-fire"),
+      Observations = c(obs_pre, obs_post)
+    )
 
+    # Species richness breakdown by taxon class (if needed).
+    qry_pre <- tbl(con, "gbif_frap") %>%
+      filter(
+        FIRE_NAME == selected_fire_name_local,
+        observed_on >= start_date,
+        observed_on < fire_date
+      )
+    qry_pre <- apply_taxon_filter(qry_pre)
+    class_pre <- qry_pre %>%
+      group_by(taxon_class_name) %>%
+      summarize(Richness = n_distinct(scientific_name)) %>%
+      collect()
+
+    qry_post <- tbl(con, "gbif_frap") %>%
+      filter(
+        FIRE_NAME == selected_fire_name_local,
+        observed_on >= fire_date,
+        observed_on <= end_date
+      )
+    qry_post <- apply_taxon_filter(qry_post)
+    class_post <- qry_post %>%
+      group_by(taxon_class_name) %>%
+      summarize(Richness = n_distinct(scientific_name)) %>%
+      collect()
+
+    class_pre$Period <- "Pre-fire"
+    class_post$Period <- "Post-fire"
     class_df <- rbind(class_pre, class_post) %>%
       mutate(Period = factor(Period, levels = c("Pre-fire", "Post-fire")))
 
     print("richness_data: Finished calculating richness data.")
-
-    list(total = total_df, class = class_df)
+    list(total = total_df, obs = obs_df, class = class_df)
   })
 
   # --- Render the Richness Plot -----------------------------------------------
@@ -414,34 +519,23 @@ server <- function(input, output, session) {
     print("output$richnessPlot: Rendering species richness plot.")
     rd <- richness_data()
     req(rd)
+    period_colors <- c("Pre-fire" = "#68C6C0", "Post-fire" = "#dd5858")
 
-    period_colors <- c(
-      "Pre-fire" = "#68C6C0",
-      "Post-fire" = "#dd5858"
-    )
-
+    # Plot for total species richness.
     p_total <- ggplot(rd$total, aes(x = Period, y = Richness, fill = Period)) +
       geom_bar(stat = "identity") +
       scale_fill_manual(values = period_colors) +
       theme_minimal() +
-      labs(
-        title = "Total Species Richness",
-        y = "Number of Unique Species",
-        x = ""
-      )
+      labs(title = "Total Species Richness", y = "Number of Unique Species", x = "")
 
-    p_class <- ggplot(rd$class, aes(x = taxon_class_name, y = Richness, fill = Period)) +
+    # Plot for total observation count.
+    p_obs <- ggplot(rd$obs, aes(x = Period, y = Observations, fill = Period)) +
       geom_bar(stat = "identity", position = "dodge") +
       scale_fill_manual(values = period_colors) +
       theme_minimal() +
-      labs(
-        title = "Species Richness by Taxon Class",
-        y = "Number of Unique Species",
-        x = "Taxon Class"
-      ) +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+      labs(title = "Total Observation Count", y = "Number of Observations", x = "")
 
-    combined_plot <- p_total / p_class
+    combined_plot <- p_total / p_obs
     combined_plot
   })
 
