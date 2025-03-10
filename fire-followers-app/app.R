@@ -1,6 +1,7 @@
 # app.R
 
 library(shiny)
+library(shinyjs)
 library(DBI)
 library(duckdb)
 library(dplyr)
@@ -8,7 +9,7 @@ library(dbplyr)
 library(sf)
 library(leaflet)
 library(ggplot2)
-# library(vscDebugger)
+library(patchwork)
 
 # Disable S2 geometry if needed
 sf_use_s2(FALSE)
@@ -30,36 +31,85 @@ print(paste("Number of fire names retrieved:", length(fire_names)))
 
 # --- Define the UI -----------------------------------------------------------
 ui <- fluidPage(
+  useShinyjs(), # initialize shinyjs
   titlePanel("CNPS Fire Followers Explorer"),
-  sidebarLayout(
-    sidebarPanel(
-      # Use selectizeInput for improved performance with many items
-      selectizeInput("fire", "Select Fire",
-        choices = unique(fire_names),
-        selected = "GLASS",
-        options = list(
-          placeholder = "Select a fire",
-          maxOptions = 1000
-        )
-      ),
-      sliderInput("grid_n",
-        "Grid resolution (cells along longest dimension)",
-        min = 5, max = 50, value = 20
-      ),
-      # Replace numeric input with a date slider.
-      # Set an initial wide range; it will be updated when a fire is selected.
-      sliderInput("time_range",
-        "Select date range for species richness",
-        min = as.Date("2015-01-01"),
-        max = Sys.Date(),
-        value = c(as.Date("2015-01-01"), Sys.Date()),
-        timeFormat = "%Y-%m-%d"
-      )
+
+  # JavaScript to prevent clicks on disabled tabs
+  tags$script(HTML(
+    "
+    $(document).on('click', '#tabs li a.disabled', function(e) {
+      e.preventDefault();
+      return false;
+    });
+    "
+  )),
+
+  # Hidden input to store the selected fire (updated by clicking the map)
+  tags$div(
+    style = "display:none;",
+    textInput("fire", "Selected Fire", value = "")
+  ),
+
+  # Tabset now has just two tabs: 'Select Fire' and 'Species Richness'
+  tabsetPanel(
+    id = "tabs",
+    tabPanel(
+      "Select Fire",
+      leafletOutput("fireMap", height = 600)
     ),
-    mainPanel(
-      tabsetPanel(
-        tabPanel("Map", leafletOutput("map", height = 600)),
-        tabPanel("Species Richness", plotOutput("richnessPlot"))
+    tabPanel(
+      "Species Richness",
+      sidebarLayout(
+        sidebarPanel(
+          # Render sliderInput dynamically with fire alarm date in the label
+          uiOutput("time_range_ui")
+        ),
+        mainPanel(
+          # Collapsible panels using Bootstrap collapse
+          div(
+            class = "panel-group", id = "accordion",
+            # Panel for species richness plot
+            div(
+              class = "panel panel-default",
+              div(
+                class = "panel-heading",
+                h4(
+                  class = "panel-title",
+                  a("Species Richness Plot",
+                    `data-toggle` = "collapse", href = "#collapseOne"
+                  )
+                )
+              ),
+              div(
+                id = "collapseOne", class = "panel-collapse collapse in", # open by default
+                div(
+                  class = "panel-body",
+                  plotOutput("richnessPlot")
+                )
+              )
+            ),
+            # Panel for fire insights map
+            div(
+              class = "panel panel-default",
+              div(
+                class = "panel-heading",
+                h4(
+                  class = "panel-title",
+                  a("Fire Insights Map",
+                    `data-toggle` = "collapse", href = "#collapseTwo"
+                  )
+                )
+              ),
+              div(
+                id = "collapseTwo", class = "panel-collapse collapse",
+                div(
+                  class = "panel-body",
+                  leafletOutput("map", height = 600)
+                )
+              )
+            )
+          )
+        )
       )
     )
   )
@@ -67,52 +117,101 @@ ui <- fluidPage(
 
 # --- Define the Server -------------------------------------------------------
 server <- function(input, output, session) {
-  # Observer: When a fire is selected, update the date slider to center around its ALARM_DATE.
+  # Observer to disable/enable tabs based on fire selection
   observe({
+    if (is.null(input$fire) || input$fire == "") {
+      shinyjs::runjs("$('#tabs li a:contains(\"Species Richness\")').addClass('disabled').css({'pointer-events': 'none', 'opacity': '0.5'});")
+    } else {
+      shinyjs::runjs("$('#tabs li a:contains(\"Species Richness\")').removeClass('disabled').css({'pointer-events': 'auto', 'opacity': '1'});")
+    }
+  })
+
+  # Render the time range slider UI with the fire alarm date in the label.
+  output$time_range_ui <- renderUI({
     req(input$fire)
-    print(paste("updateSlider: Updating date slider for fire =", input$fire))
-    # Retrieve fire info from the "frap" table (assumed to hold fire polygon data)
-    fire_info <- con |>
+    selected_fire_name <- input$fire
+    fire_info <- con %>%
       tbl("frap") %>%
-      filter(FIRE_NAME == input$fire) |>
+      filter(FIRE_NAME == selected_fire_name) %>%
       collect()
     if (nrow(fire_info) == 0) {
-      print("updateSlider: No fire info found!")
-      return()
+      return(NULL)
     }
     alarm_date <- as.Date(fire_info$ALARM_DATE[1])
     new_start <- alarm_date - (365 * 4)
     new_end <- alarm_date + (365 * 4)
-    print(paste(
-      "updateSlider: Alarm date =", alarm_date,
-      "setting slider from", new_start, "to", new_end
-    ))
-    updateSliderInput(session, "time_range", value = c(new_start, new_end))
+    sliderInput("time_range",
+      label = HTML(paste(
+        "Select date range for species richness", "<br>",
+        "<span style='font-weight:normal; font-style:italic;'>Fire time:", alarm_date, "</span>"
+      )),
+      min = as.Date("2015-01-01"),
+      max = Sys.Date(),
+      value = c(new_start, new_end),
+      step = 30,
+      timeFormat = "%Y-%m"
+    )
+  })
+
+  # Reactive: Get all fires (one record per fire, using the largest fire by GIS_ACRES)
+  all_fires <- reactive({
+    print("all_fires: Retrieving all fire data.")
+    fires_info <- tbl(con, "frap") %>%
+      group_by(FIRE_NAME) %>%
+      slice_max(GIS_ACRES, with_ties = FALSE) %>%
+      collect()
+
+    fires_sf <- fires_info %>%
+      mutate(geometry = st_as_sfc(geom_wkt, crs = 4326)) %>%
+      st_as_sf() %>%
+      st_make_valid()
+
+    fires_sf
+  })
+
+  # --- First Tab: Fire Centroids Map ---------------------------------------
+  output$fireMap <- renderLeaflet({
+    print("output$fireMap: Rendering fire centroids map.")
+    req(all_fires())
+    # Compute centroids of all fire polygons
+    fire_centroids <- st_centroid(all_fires())
+    leaflet() %>%
+      addTiles() %>%
+      addMarkers(
+        data = fire_centroids,
+        label = ~FIRE_NAME,
+        layerId = ~FIRE_NAME
+      )
+  })
+
+  # Update the hidden input 'fire' when a fire centroid is clicked
+  observeEvent(input$fireMap_marker_click, {
+    click <- input$fireMap_marker_click
+    selected_fire_name <- click$id
+    print(paste("Fire selected from map:", selected_fire_name))
+    updateTextInput(session, "fire", value = selected_fire_name)
   })
 
   # Reactive: Get fire info for the selected fire as an sf data frame.
   selected_fire <- reactive({
     req(input$fire)
     print(paste("selected_fire: Triggered for fire =", input$fire))
-    # Retrieve fire info from DuckDB using dbplyr (from the "frap" table)
-    # browser()
+    selected_fire_name <- input$fire
     fire_info <- con |>
       tbl("frap") %>%
-      filter(FIRE_NAME == input$fire) |>
-      # In case there are multiple firs of the same name, just get the biggest one for now
-      slice_max(GIS_ACRES) |>
+      filter(FIRE_NAME == selected_fire_name) %>%
+      slice_max(GIS_ACRES, with_ties = FALSE) %>%
       collect()
 
     print("selected_fire: Fire info collected from DuckDB.")
 
-    # Convert the WKT string to an sfc geometry (assuming WGS84)
     fire_sf <- fire_info %>%
       mutate(geometry = st_as_sfc(geom_wkt, crs = 4326)) %>%
-      st_as_sf() |>
+      st_as_sf() %>%
       st_make_valid()
 
     if (st_geometry_type(fire_sf) == "GEOMETRYCOLLECTION") {
-      fire_sf <- fire_sf |>
+      fire_sf <- fire_sf %>%
         mutate(geometry = st_union(st_collection_extract(geometry, "POLYGON")))
     }
 
@@ -120,13 +219,14 @@ server <- function(input, output, session) {
     fire_sf
   })
 
-  # Reactive: Retrieve species observation points for the selected fire using dbplyr.
+  # Reactive: Retrieve species observation points for the selected fire.
   species_points <- reactive({
     req(input$fire)
     print(paste("species_points: Retrieving species observations for fire =", input$fire))
+    selected_fire_name <- input$fire
     spp_df <- tbl(con, "gbif_frap") %>%
       filter(
-        `FIRE_NAME` == input$fire,
+        FIRE_NAME == selected_fire_name,
         !is.na(latitude),
         !is.na(longitude)
       ) %>%
@@ -148,38 +248,34 @@ server <- function(input, output, session) {
     fire_sf <- selected_fire()
     spp_sf <- species_points()
     req(fire_sf, spp_sf)
-    # browser()
     fire_bbox <- st_bbox(fire_sf)
     print(paste(
       "species_grid: Fire bounding box =",
       paste(names(fire_bbox), round(fire_bbox, 2), collapse = ", ")
     ))
+    # Use fixed grid resolution of 20 cells along the longest dimension
     cell_size <- max(
       fire_bbox$xmax - fire_bbox$xmin,
       fire_bbox$ymax - fire_bbox$ymin
-    ) / input$grid_n
+    ) / 20
     print(paste("species_grid: Calculated cell size =", cell_size))
     grid <- st_make_grid(fire_sf, cellsize = cell_size, square = TRUE)
 
-    grid_sf <- st_sf(geometry = grid) |>
-      st_make_valid() |>
-      st_intersection(fire_sf |> select(geometry))
+    grid_sf <- st_sf(geometry = grid) %>%
+      st_make_valid() %>%
+      st_intersection(fire_sf %>% select(geometry))
 
-    if ("GEOMETRYCOLLECTION" %in% unique(grid_sf |> st_geometry_type())) {
-      # This turns GEOMETRYCOLLECTIONS into MULTIPOLYGON
-      grid_sf <- grid_sf |>
-        rowwise() |>
+    if ("GEOMETRYCOLLECTION" %in% unique(st_geometry_type(grid_sf))) {
+      grid_sf <- grid_sf %>%
+        rowwise() %>%
         mutate(geometry = if_else(
           st_geometry_type(geometry) == "GEOMETRYCOLLECTION",
           st_union(st_collection_extract(geometry, "POLYGON")),
           geometry
-        )) |>
+        )) %>%
         ungroup()
     }
 
-    # grid_sf |>
-    #   st_geometry_type() |>
-    #   unique()
     print(paste("species_grid: Number of grid cells after intersection =", nrow(grid_sf)))
     counts <- lengths(st_intersects(grid_sf, spp_sf))
     grid_sf$count <- counts
@@ -187,15 +283,18 @@ server <- function(input, output, session) {
     grid_sf
   })
 
-  # --- Map Output -------------------------------------------------------------
+  # --- Fire Insights Map (now shown within the Species Richness tab) ------
   output$map <- renderLeaflet({
-    print("output$map: Rendering map.")
+    req(selected_fire(), species_grid())
+    print("output$map: Rendering fire insights map.")
     fire_sf <- selected_fire()
-    req(fire_sf)
-    # browser()
     centroid <- st_centroid(fire_sf$geometry)
     coords <- st_coordinates(centroid)
-    print(paste("output$map: Map centroid at (", coords[1], ",", coords[2], ")"))
+    grid_sf <- species_grid() %>%
+      mutate(log_count = log1p(count))
+
+    pal <- colorNumeric("YlOrRd", domain = grid_sf$log_count)
+
     leaflet() %>%
       addTiles() %>%
       setView(lng = coords[1], lat = coords[2], zoom = 10) %>%
@@ -206,45 +305,19 @@ server <- function(input, output, session) {
         fill = FALSE,
         group = "Fire",
         popup = ~FIRE_NAME
-      )
-  })
-
-  # Update the map with the observation density grid.
-  observe({
-    print("observe: Updating species grid layer on the map.")
-
-    grid_sf <- species_grid()
-
-    req(grid_sf)
-
-    # Apply log transformation to count (adding 1 to avoid log(0))
-    grid_sf <- grid_sf %>%
-      mutate(log_count = log1p(count)) # log1p(x) = log(x + 1)
-
-    # Define color palette based on log-transformed count
-    pal <- colorNumeric("YlOrRd", domain = grid_sf$log_count)
-
-    print("observe: Color palette created for grid cells based on log(count).")
-
-    leafletProxy("map") %>%
-      clearGroup("Grid") %>%
+      ) %>%
       addPolygons(
         data = grid_sf,
-        fillColor = ~ pal(log_count), # Use log-transformed count for fill color
+        fillColor = ~ pal(log_count),
         fillOpacity = 0.7,
         color = "black",
         weight = 1,
         group = "Grid",
-        popup = ~ paste("Obs. Count:", count) # Show raw count in popup
+        popup = ~ paste("Obs. Count:", count)
       )
-
-    print("observe: Species grid layer added to the map.")
   })
 
-
-
-  # --- Species Richness Panel -----------------------------------------------
-  # Compute total species richness and species richness by taxon_class_name
+  ## --- Species Richness Data and Plot ---------------------------------------
   richness_data <- reactive({
     print("richness_data: Calculating species richness data.")
     fire_sf <- selected_fire()
@@ -253,38 +326,38 @@ server <- function(input, output, session) {
     fire_date <- as.Date(fire_sf$ALARM_DATE[1])
     print(paste("richness_data: Fire alarm date =", fire_date))
 
-    # Use the date slider values for the range.
     start_date <- as.Date(input$time_range[1])
     end_date <- as.Date(input$time_range[2])
     print(paste("richness_data: Selected date range =", start_date, "to", end_date))
 
-    ## Total species richness (overall) -----------------------------------------
-    # Pre-fire total richness.
+    selected_fire_name <- input$fire
+
+    # Total species richness pre-fire.
     total_pre <- if (start_date < fire_date) {
       tbl(con, "gbif_frap") %>%
         filter(
-          `FIRE_NAME` == input$fire,
+          FIRE_NAME == selected_fire_name,
           observed_on >= start_date,
           observed_on < fire_date
         ) %>%
-        summarize(richness = n_distinct(scientific_name)) |>
-        collect() |>
+        summarize(richness = n_distinct(scientific_name)) %>%
+        collect() %>%
         pull(richness)
     } else {
       0
     }
     print(paste("richness_data: Total pre-fire richness =", total_pre))
 
-    # Post-fire total richness.
+    # Total species richness post-fire.
     total_post <- if (end_date >= fire_date) {
       tbl(con, "gbif_frap") %>%
         filter(
-          `FIRE_NAME` == input$fire,
+          FIRE_NAME == selected_fire_name,
           observed_on >= fire_date,
           observed_on <= end_date
         ) %>%
-        summarize(richness = n_distinct(scientific_name)) |>
-        collect() |>
+        summarize(richness = n_distinct(scientific_name)) %>%
+        collect() %>%
         pull(richness)
     } else {
       0
@@ -294,43 +367,41 @@ server <- function(input, output, session) {
     total_df <- data.frame(
       Period   = c("Pre-fire", "Post-fire"),
       Richness = c(total_pre, total_post)
-    ) |>
+    ) %>%
       mutate(Period = factor(Period, levels = c("Pre-fire", "Post-fire")))
 
-    ## Species richness by taxon_class_name -------------------------------
-    # Pre-fire breakdown by taxon class.
+    # Species richness breakdown by taxon_class_name.
     class_pre <- if (start_date < fire_date) {
       tbl(con, "gbif_frap") %>%
         filter(
-          `FIRE_NAME` == input$fire,
+          FIRE_NAME == selected_fire_name,
           observed_on >= start_date,
           observed_on < fire_date
         ) %>%
         group_by(taxon_class_name) %>%
-        summarize(Richness = n_distinct(scientific_name)) |>
+        summarize(Richness = n_distinct(scientific_name)) %>%
         collect()
     } else {
       data.frame(taxon_class_name = character(), Richness = integer())
     }
     class_pre$Period <- "Pre-fire"
 
-    # Post-fire breakdown by taxon class.
     class_post <- if (end_date >= fire_date) {
       tbl(con, "gbif_frap") %>%
         filter(
-          `FIRE_NAME` == input$fire,
+          FIRE_NAME == selected_fire_name,
           observed_on >= fire_date,
           observed_on <= end_date
         ) %>%
         group_by(taxon_class_name) %>%
-        summarize(Richness = n_distinct(scientific_name)) |>
+        summarize(Richness = n_distinct(scientific_name)) %>%
         collect()
     } else {
       data.frame(taxon_class_name = character(), Richness = integer())
     }
     class_post$Period <- "Post-fire"
 
-    class_df <- rbind(class_pre, class_post) |>
+    class_df <- rbind(class_pre, class_post) %>%
       mutate(Period = factor(Period, levels = c("Pre-fire", "Post-fire")))
 
     print("richness_data: Finished calculating richness data.")
@@ -344,18 +415,14 @@ server <- function(input, output, session) {
     rd <- richness_data()
     req(rd)
 
-    library(patchwork)
-
-    # Define color mapping
     period_colors <- c(
       "Pre-fire" = "#68C6C0",
-      "Post-fire" = "#dd5858" # Firebrick Red (burnt landscape)
+      "Post-fire" = "#dd5858"
     )
 
-    # Plot for total species richness.
     p_total <- ggplot(rd$total, aes(x = Period, y = Richness, fill = Period)) +
       geom_bar(stat = "identity") +
-      scale_fill_manual(values = period_colors) + # Custom colors
+      scale_fill_manual(values = period_colors) +
       theme_minimal() +
       labs(
         title = "Total Species Richness",
@@ -363,19 +430,17 @@ server <- function(input, output, session) {
         x = ""
       )
 
-    # Plot for species richness by taxon_class_name.
     p_class <- ggplot(rd$class, aes(x = taxon_class_name, y = Richness, fill = Period)) +
       geom_bar(stat = "identity", position = "dodge") +
-      scale_fill_manual(values = period_colors) + # Custom colors
+      scale_fill_manual(values = period_colors) +
       theme_minimal() +
       labs(
-        title = "Species Richness by Taxon class",
+        title = "Species Richness by Taxon Class",
         y = "Number of Unique Species",
-        x = "Taxon class"
+        x = "Taxon Class"
       ) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-    # Combine the two plots vertically.
     combined_plot <- p_total / p_class
     combined_plot
   })
