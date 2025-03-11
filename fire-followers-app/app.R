@@ -101,48 +101,16 @@ ui <- fluidPage(
           )
         ),
         mainPanel(
-          # Collapsible panels using Bootstrap collapse.
-          div(
-            class = "panel-group", id = "accordion",
-            # Panel for species richness plot
-            div(
-              class = "panel panel-default",
-              div(
-                class = "panel-heading",
-                h4(
-                  class = "panel-title",
-                  a("Species Richness Plot (click to expand)",
-                    `data-toggle` = "collapse", href = "#collapseOne"
-                  )
-                )
-              ),
-              div(
-                id = "collapseOne", class = "panel-collapse collapse", # starts collapsed
-                div(
-                  class = "panel-body",
-                  plotOutput("richnessPlot")
-                )
-              )
+          # Replace collapsible panels with tabsetPanel
+          tabsetPanel(
+            id = "richness_tabs",
+            tabPanel(
+              "Fire Insights Map",
+              leafletOutput("map", height = 600)
             ),
-            # Panel for fire insights map
-            div(
-              class = "panel panel-default",
-              div(
-                class = "panel-heading",
-                h4(
-                  class = "panel-title",
-                  a("Fire Insights Map (click to expand)",
-                    `data-toggle` = "collapse", href = "#collapseTwo"
-                  )
-                )
-              ),
-              div(
-                id = "collapseTwo", class = "panel-collapse collapse", # starts collapsed
-                div(
-                  class = "panel-body",
-                  leafletOutput("map", height = 600)
-                )
-              )
+            tabPanel(
+              "Species Richness Plot",
+              plotOutput("richnessPlot")
             )
           )
         )
@@ -277,7 +245,7 @@ server <- function(input, output, session) {
     updateTabsetPanel(session, "tabs", selected = "Species Richness")
   })
 
-  # Reactive: Get fire info for the selected fires as an sf data frame.
+  # Cache the fire data since it's expensive to compute
   selected_fire <- reactive({
     req(input$fire_select)
     print(paste("selected_fire: Triggered for fires =", paste(input$fire_select, collapse = ", ")))
@@ -308,11 +276,11 @@ server <- function(input, output, session) {
 
     print("selected_fire: Converted fire info to sf object.")
     fire_sf
-  })
+  }) %>% bindCache(input$fire_select)
 
-  # Reactive: Retrieve species observation points for the selected fires.
+  # Cache the species points data
   species_points <- reactive({
-    req(input$fire_select)
+    req(input$fire_select, input$taxa_filter)
     print(paste("species_points: Retrieving species observations for fires =", paste(input$fire_select, collapse = ", ")))
     spp_query <- tbl(con, "gbif_frap") %>%
       filter(
@@ -348,9 +316,9 @@ server <- function(input, output, session) {
     sfc_points <- st_as_sf(spp_df, coords = c("longitude", "latitude"), crs = 4326)
     print("species_points: Converted species observations to sf object.")
     sfc_points
-  })
+  }) %>% bindCache(input$fire_select, input$taxa_filter)
 
-  # Reactive: Create a grid over the fire polygon(s) and count species observations.
+  # Cache the grid calculations
   species_grid <- reactive({
     req(input$count_type)
     print("species_grid: Triggered.")
@@ -393,14 +361,13 @@ server <- function(input, output, session) {
     grid_sf$count <- counts
     print("species_grid: Computed species counts for each grid cell.")
     grid_sf
-  })
+  }) %>% bindCache(input$fire_select, input$taxa_filter, input$count_type)
 
-  # --- Fire Insights Map (shown within the Species Richness tab) ------
+  # Modify the map output to use bindCache
   output$map <- renderLeaflet({
     req(selected_fire(), species_grid(), input$count_type)
     print("output$map: Rendering fire insights map.")
     fire_sf <- selected_fire()
-
     grid_sf <- species_grid()
     pal <- colorNumeric("YlOrRd", domain = log1p(grid_sf$count))
 
@@ -442,7 +409,7 @@ server <- function(input, output, session) {
         labFormat = labelFormat(transform = function(x) round(expm1(x), 0)),
         title = legend_title
       )
-  })
+  }) %>% bindCache(input$fire_select, input$taxa_filter, input$count_type)
 
   # --- Species Richness Data and Plot ---------------------------------------
   richness_data <- reactive({
