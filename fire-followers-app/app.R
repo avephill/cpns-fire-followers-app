@@ -38,6 +38,10 @@ ui <- fluidPage(
       .selectize-control .selectize-input {
         padding: 8px;
       }
+      /* Add white background to sidebarPanel */
+      .well.sidebar {
+        background-color: white;
+      }
     "))
   ),
   titlePanel("CNPS Fire Followers Explorer"),
@@ -65,39 +69,49 @@ ui <- fluidPage(
         # Decrease sidebar width by setting width = 3
         sidebarPanel(
           width = 3,
-          # Render time slider dynamically with fire alarm date in the label.
-          uiOutput("time_range_ui"),
-          # Use radioGroupButtons for Display Count toggle
-          radioGroupButtons(
-            inputId = "count_type",
-            label = "Display Count:",
-            choices = c("Total Species", "Total Observations"),
-            selected = "Total Species",
-            justified = TRUE,
-            status = "primary"
-          ),
-          # New searchable, multi-select input for fires.
-          selectizeInput("fire_select", "Select Fire(s)",
-            choices = fire_names,
-            selected = NULL,
-            multiple = TRUE,
-            options = list(placeholder = "Search for fires")
-          ),
-          # Single selectizeInput for taxonomic filtering across all levels.
-          selectizeInput("taxa_filter", "Taxa Filter",
-            choices = NULL,
-            options = list(
-              placeholder = "Search by class, family, genus, or species",
-              render = I('{
-                 option: function(item, escape) {
-                   return "<div style=\'padding: 0px 8px\'>" + item.label + "</div>";
-                 },
-                 item: function(item, escape) {
-                   return "<div style=\'padding: 0px 8px\'>" + item.label + "</div>";
-                 }
-               }')
+          class = "sidebar",
+          # Fire-related filters
+          wellPanel(
+            h4("Fire Filters"),
+            # New searchable, multi-select input for fires.
+            selectizeInput("fire_select", "Select Fire(s)",
+              choices = fire_names,
+              selected = NULL,
+              multiple = TRUE,
+              options = list(placeholder = "Search for fires")
             ),
-            multiple = FALSE
+            # Render time slider dynamically with fire alarm date in the label.
+            uiOutput("time_range_ui")
+          ),
+
+          # Observation-related filters
+          wellPanel(
+            h4("Observation Filters"),
+            # Single selectizeInput for taxonomic filtering across all levels.
+            selectizeInput("taxa_filter", "Taxa Filter",
+              choices = NULL,
+              options = list(
+                placeholder = "Search by class, family, genus, or species",
+                render = I('{
+                   option: function(item, escape) {
+                     return "<div style=\'padding: 0px 8px\'>" + item.label + "</div>";
+                   },
+                   item: function(item, escape) {
+                     return "<div style=\'padding: 0px 8px\'>" + item.label + "</div>";
+                   }
+                 }')
+              ),
+              multiple = FALSE
+            ),
+            # Use radioGroupButtons for Display Count toggle
+            radioGroupButtons(
+              inputId = "count_type",
+              label = "Display Count:",
+              choices = c("Species" = "Total Species", "Observations" = "Total Observations"),
+              selected = "Total Species",
+              justified = TRUE,
+              status = "primary"
+            )
           )
         ),
         mainPanel(
