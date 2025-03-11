@@ -1,7 +1,6 @@
-# app.R
-
 library(shiny)
 library(shinyjs)
+library(shinyWidgets)
 library(DBI)
 library(duckdb)
 library(dplyr)
@@ -10,6 +9,7 @@ library(sf)
 library(leaflet)
 library(ggplot2)
 library(patchwork)
+library(purrr)
 
 # Disable S2 geometry if needed
 sf_use_s2(FALSE)
@@ -32,6 +32,14 @@ print(paste("Number of fire names retrieved:", length(fire_names)))
 # --- Define the UI -----------------------------------------------------------
 ui <- fluidPage(
   useShinyjs(), # initialize shinyjs
+  # Custom CSS to add more padding to taxa_filter dropdown text
+  tags$head(
+    tags$style(HTML("
+      .selectize-control .selectize-input {
+        padding: 8px;
+      }
+    "))
+  ),
   titlePanel("CNPS Fire Followers Explorer"),
 
   # JavaScript to prevent clicks on disabled tabs
@@ -60,9 +68,20 @@ ui <- fluidPage(
     tabPanel(
       "Species Richness",
       sidebarLayout(
+        # Decrease sidebar width by setting width = 3
         sidebarPanel(
+          width = 3,
           # Render time slider dynamically with fire alarm date in the label.
           uiOutput("time_range_ui"),
+          # Use radioGroupButtons for Display Count toggle
+          radioGroupButtons(
+            inputId = "count_type",
+            label = "Display Count:",
+            choices = c("Total Species", "Total Observations"),
+            selected = "Total Species",
+            justified = TRUE,
+            status = "primary"
+          ),
           # Single selectizeInput for taxonomic filtering across all levels.
           selectizeInput("taxa_filter", "Taxa Filter",
             choices = NULL,
@@ -198,13 +217,16 @@ server <- function(input, output, session) {
     # Create a combined list with level prefixes.
     # Labels are of the form "Alnus <span style='color:gray;'>Genus</span>".
     choices <- c(
+      setNames("all", "All taxa"),
       setNames(paste0("class|", classes), paste0(classes, " <span style='color:gray;'>Class</span>")),
       setNames(paste0("family|", families), paste0(families, " <span style='color:gray;'>Family</span>")),
       setNames(paste0("genus|", genera), paste0(genera, " <span style='color:gray;'>Genus</span>")),
       setNames(paste0("species|", species), paste0(species, " <span style='color:gray;'>Species</span>"))
     )
     updateSelectizeInput(session, "taxa_filter",
-      choices = choices, server = TRUE
+      choices = choices,
+      selected = "all",
+      server = TRUE
     )
   })
 
@@ -228,12 +250,20 @@ server <- function(input, output, session) {
     req(all_fires())
     # Compute centroids of all fire polygons.
     fire_centroids <- st_centroid(all_fires())
+    # Create custom icon for fire marker
+    fireIcons <- awesomeIcons(
+      icon = "fire",
+      iconColor = "red",
+      markerColor = "orange",
+      library = "fa"
+    )
     leaflet() %>%
       addTiles() %>%
-      addMarkers(
+      addAwesomeMarkers(
         data = fire_centroids,
         label = ~FIRE_NAME,
-        layerId = ~FIRE_NAME
+        layerId = ~FIRE_NAME,
+        icon = fireIcons
       )
   })
 
@@ -243,6 +273,8 @@ server <- function(input, output, session) {
     selected_fire_name <- click$id
     print(paste("Fire selected from map:", selected_fire_name))
     updateTextInput(session, "fire", value = selected_fire_name)
+    # Automatically switch to the Species Richness tab
+    updateTabsetPanel(session, "tabs", selected = "Species Richness")
   })
 
   # Reactive: Get fire info for the selected fire as an sf data frame.
@@ -280,7 +312,8 @@ server <- function(input, output, session) {
         !is.na(latitude),
         !is.na(longitude)
       )
-    if (!is.null(input$taxa_filter) && input$taxa_filter != "") {
+    # Apply taxon filtering only if a specific taxon is selected.
+    if (!is.null(input$taxa_filter) && input$taxa_filter != "" && input$taxa_filter != "all") {
       split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
       level <- split_val[1]
       value <- split_val[2]
@@ -312,6 +345,7 @@ server <- function(input, output, session) {
 
   # Reactive: Create a grid over the fire polygon and count species observations.
   species_grid <- reactive({
+    req(input$count_type)
     print("species_grid: Triggered.")
     fire_sf <- selected_fire()
     spp_sf <- species_points()
@@ -335,7 +369,17 @@ server <- function(input, output, session) {
         ungroup()
     }
     print(paste("species_grid: Number of grid cells after intersection =", nrow(grid_sf)))
-    counts <- lengths(st_intersects(grid_sf, spp_sf))
+
+    if (input$count_type == "Total Observations") {
+      counts <- lengths(st_intersects(grid_sf, spp_sf))
+    } else { # Total Species
+      counts <- sapply(st_intersects(grid_sf, spp_sf), function(idxs) {
+        if (length(idxs) == 0) {
+          return(0)
+        }
+        length(unique(spp_sf$scientific_name[idxs]))
+      })
+    }
     grid_sf$count <- counts
     print("species_grid: Computed species counts for each grid cell.")
     grid_sf
@@ -343,13 +387,25 @@ server <- function(input, output, session) {
 
   # --- Fire Insights Map (shown within the Species Richness tab) ------
   output$map <- renderLeaflet({
-    req(selected_fire(), species_grid())
+    req(selected_fire(), species_grid(), input$count_type)
     print("output$map: Rendering fire insights map.")
     fire_sf <- selected_fire()
     centroid <- st_centroid(fire_sf$geometry)
     coords <- st_coordinates(centroid)
-    grid_sf <- species_grid() %>% mutate(log_count = log1p(count))
-    pal <- colorNumeric("YlOrRd", domain = grid_sf$log_count)
+    grid_sf <- species_grid()
+    pal <- colorNumeric("YlOrRd", domain = log1p(grid_sf$count))
+
+    popup_text <- if (input$count_type == "Total Observations") {
+      ~ paste("Obs. Count:", count)
+    } else {
+      ~ paste("Species Count:", count)
+    }
+    legend_title <- if (input$count_type == "Total Observations") {
+      "Observation Count"
+    } else {
+      "Species Count"
+    }
+
     leaflet() %>%
       addTiles() %>%
       setView(lng = coords[1], lat = coords[2], zoom = 10) %>%
@@ -363,17 +419,25 @@ server <- function(input, output, session) {
       ) %>%
       addPolygons(
         data = grid_sf,
-        fillColor = ~ pal(log_count),
+        fillColor = ~ pal(log1p(count)),
         fillOpacity = 0.7,
         color = "black",
         weight = 1,
         group = "Grid",
-        popup = ~ paste("Obs. Count:", count)
+        popup = popup_text
+      ) %>%
+      addLegend(
+        position = "bottomright",
+        pal = pal,
+        values = log1p(grid_sf$count),
+        labFormat = labelFormat(transform = function(x) round(expm1(x), 0)),
+        title = legend_title
       )
   })
 
   # --- Species Richness Data and Plot ---------------------------------------
   richness_data <- reactive({
+    req(input$count_type)
     print("richness_data: Calculating species richness data.")
     fire_sf <- selected_fire()
     req(fire_sf)
@@ -386,7 +450,7 @@ server <- function(input, output, session) {
 
     # Helper function to apply the taxa_filter.
     apply_taxon_filter <- function(qry) {
-      if (!is.null(input$taxa_filter) && input$taxa_filter != "") {
+      if (!is.null(input$taxa_filter) && input$taxa_filter != "" && input$taxa_filter != "all") {
         split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
         level <- split_val[1]
         value <- split_val[2]
@@ -439,11 +503,6 @@ server <- function(input, output, session) {
     }
     print(paste("richness_data: Total post-fire richness =", total_post))
 
-    total_df <- data.frame(
-      Period   = c("Pre-fire", "Post-fire"),
-      Richness = c(total_pre, total_post)
-    ) %>% mutate(Period = factor(Period, levels = c("Pre-fire", "Post-fire")))
-
     # Total observation counts pre-fire.
     obs_pre <- if (start_date < fire_date) {
       qry <- tbl(con, "gbif_frap") %>%
@@ -475,68 +534,44 @@ server <- function(input, output, session) {
     } else {
       0
     }
-    obs_df <- data.frame(
-      Period = c("Pre-fire", "Post-fire"),
-      Observations = c(obs_pre, obs_post)
-    )
-
-    # Species richness breakdown by taxon class (if needed).
-    qry_pre <- tbl(con, "gbif_frap") %>%
-      filter(
-        FIRE_NAME == selected_fire_name_local,
-        observed_on >= start_date,
-        observed_on < fire_date
-      )
-    qry_pre <- apply_taxon_filter(qry_pre)
-    class_pre <- qry_pre %>%
-      group_by(taxon_class_name) %>%
-      summarize(Richness = n_distinct(scientific_name)) %>%
-      collect()
-
-    qry_post <- tbl(con, "gbif_frap") %>%
-      filter(
-        FIRE_NAME == selected_fire_name_local,
-        observed_on >= fire_date,
-        observed_on <= end_date
-      )
-    qry_post <- apply_taxon_filter(qry_post)
-    class_post <- qry_post %>%
-      group_by(taxon_class_name) %>%
-      summarize(Richness = n_distinct(scientific_name)) %>%
-      collect()
-
-    class_pre$Period <- "Pre-fire"
-    class_post$Period <- "Post-fire"
-    class_df <- rbind(class_pre, class_post) %>%
-      mutate(Period = factor(Period, levels = c("Pre-fire", "Post-fire")))
-
     print("richness_data: Finished calculating richness data.")
-    list(total = total_df, obs = obs_df, class = class_df)
+
+    if (input$count_type == "Total Species") {
+      df <- data.frame(
+        Period = c("Pre-fire", "Post-fire"),
+        Count = c(total_pre, total_post)
+      )
+    } else {
+      df <- data.frame(
+        Period = c("Pre-fire", "Post-fire"),
+        Count = c(obs_pre, obs_post)
+      )
+    }
+    df <- df %>% mutate(Period = factor(Period, levels = c("Pre-fire", "Post-fire")))
+    df
   })
 
   # --- Render the Richness Plot -----------------------------------------------
   output$richnessPlot <- renderPlot({
+    req(richness_data())
     print("output$richnessPlot: Rendering species richness plot.")
     rd <- richness_data()
-    req(rd)
     period_colors <- c("Pre-fire" = "#68C6C0", "Post-fire" = "#dd5858")
-
-    # Plot for total species richness.
-    p_total <- ggplot(rd$total, aes(x = Period, y = Richness, fill = Period)) +
+    p <- ggplot(rd, aes(x = Period, y = Count, fill = Period)) +
       geom_bar(stat = "identity") +
       scale_fill_manual(values = period_colors) +
       theme_minimal() +
-      labs(title = "Total Species Richness", y = "Number of Unique Species", x = "")
-
-    # Plot for total observation count.
-    p_obs <- ggplot(rd$obs, aes(x = Period, y = Observations, fill = Period)) +
-      geom_bar(stat = "identity", position = "dodge") +
-      scale_fill_manual(values = period_colors) +
-      theme_minimal() +
-      labs(title = "Total Observation Count", y = "Number of Observations", x = "")
-
-    combined_plot <- p_total / p_obs
-    combined_plot
+      theme(
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        plot.title = element_text(size = 18, face = "bold")
+      ) +
+      labs(
+        title = ifelse(input$count_type == "Total Species", "Total Species Richness", "Total Observations"),
+        y = ifelse(input$count_type == "Total Species", "Number of Unique Species", "Number of Observations"),
+        x = ""
+      )
+    p
   })
 
   # Close the DuckDB connection when the session ends.
