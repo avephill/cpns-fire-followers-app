@@ -36,6 +36,7 @@ print(paste("Number of fire names retrieved:", length(fire_names)))
 ui <- fluidPage(
   useShinyjs(), # initialize shinyjs
   # Custom CSS to add more padding to taxa_filter dropdown text
+  includeCSS("www/cnps-style.css"),
   tags$head(
     tags$style(HTML("
       .selectize-control .selectize-input {
@@ -118,14 +119,21 @@ ui <- fluidPage(
             # Use radioGroupButtons for Display Count toggle
             radioGroupButtons(
               inputId = "count_type",
-              label = "Display Count:",
+              label = "Show total:",
               choices = c("Species" = "Total Species", "Observations" = "Total Observations"),
-              selected = "Total Species",
-              justified = TRUE,
-              status = "primary"
+              selected = "Total Observations",
+              justified = FALSE,
+              status = "primary",
+              width = "200px"
             ),
-            # New checkbox toggle for Relative Proportion (default off)
-            checkboxInput("relative_prop", "Display Relative Proportion", value = FALSE),
+            # Replace checkbox with prettier switchInput
+            prettySwitch(
+              inputId = "relative_prop",
+              label = "Normalize taxon-specific counts by total pre-fire or post-fire count across all taxa",
+              value = FALSE,
+              status = "primary",
+              slim = TRUE
+            ),
             # Add HTML output to display the denominator values
             conditionalPanel(
               condition = "input.relative_prop == true",
@@ -166,7 +174,7 @@ ui <- fluidPage(
           offset = 1,
           br(),
           p("The CNPS Fire Followers Explorer is an interactive application designed to explore plant biodiversity
-            patterns before and after wildfire events in California using data from the CNPS California Fire Followers 2020 project. This tool allows users to visualize and analyze
+            patterns before and after wildfire events in California using data from the CNPS California Fire Followers 2020 iNaturalist project. This tool allows users to visualize and analyze
             how plant communities respond to fires of different severities and how species composition changes over time."),
           p(
             "This application was developed as a joint collaboration between the",

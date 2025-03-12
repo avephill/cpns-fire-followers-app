@@ -1,0 +1,177 @@
+/* CNPS Fire Followers Explorer CSS
+   Based on CNPS website styling */
+
+/* Color variables based on CNPS brand */
+:root {
+  --cnps-green: #4d7b43;
+  --cnps-dark-green: #345930;
+  --cnps-light-green: #6a9a61;
+  --cnps-tan: #f5f1e8;
+  --cnps-brown: #794e21;
+  --cnps-light-brown: #a67c4f;
+  --cnps-gray: #555555;
+  --cnps-light-gray: #f8f8f8;
+  --cnps-red: #dd5858;
+  --cnps-teal: #68C6C0;
+}
+
+/* Global styling */
+body {
+  font-family: 'Open Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  color: #333;
+  background-color: #ffffff;
+  line-height: 1.5;
+}
+
+/* Header styling */
+.navbar {
+  background-color: white;
+  border-bottom: 3px solid var(--cnps-green);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+}
+
+.navbar-default .navbar-brand {
+  color: var(--cnps-dark-green);
+  font-weight: bold;
+}
+
+/* Tab styling */
+.nav-tabs {
+  border-bottom: 1px solid var(--cnps-green);
+}
+
+.nav-tabs > li > a {
+  color: var(--cnps-gray);
+  margin-right: 2px;
+  border-radius: 4px 4px 0 0;
+}
+
+.nav-tabs > li > a:hover {
+  border-color: #eee #eee var(--cnps-green);
+  background-color: var(--cnps-tan);
+}
+
+.nav-tabs > li.active > a, 
+.nav-tabs > li.active > a:hover, 
+.nav-tabs > li.active > a:focus {
+  color: var(--cnps-dark-green);
+  font-weight: bold;
+  border: 1px solid var(--cnps-green);
+  border-bottom-color: transparent;
+}
+
+/* Sidebar styling */
+.well.sidebar {
+  background-color: white;
+  border: 1px solid #e3e3e3;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.well {
+  background-color: var(--cnps-light-gray);
+  border: 1px solid rgba(0,0,0,0.05);
+  box-shadow: none;
+}
+
+/* Panel headings */
+.panel-heading, .well h4 {
+  color: var(--cnps-dark-green);
+  font-weight: bold;
+  font-size: 16px;
+  border-bottom: 1px solid var(--cnps-light-green);
+  padding-bottom: 8px;
+  margin-bottom: 15px;
+}
+
+/* Form elements */
+.form-control, .selectize-input {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.selectize-input {
+  padding: 8px;
+}
+
+.selectize-input.focus {
+  border-color: var(--cnps-green);
+  box-shadow: 0 0 0 3px rgba(77, 123, 67, 0.1);
+}
+
+/* Buttons */
+.btn-primary {
+  background-color: var(--cnps-green);
+  border-color: var(--cnps-dark-green);
+}
+
+.btn-primary:hover, .btn-primary:focus {
+  background-color: var(--cnps-dark-green);
+  border-color: var(--cnps-dark-green);
+}
+
+/* Slider control */
+.irs-bar, .irs-bar-edge {
+  background: var(--cnps-green);
+  border-color: var(--cnps-dark-green);
+}
+
+.irs-from, .irs-to, .irs-single {
+  background: var(--cnps-green);
+}
+
+/* Switchers and toggle buttons */
+.pretty.p-switch input:checked ~ .state:before {
+  background-color: var(--cnps-green) !important;
+}
+
+/* Map Container styling */
+#sync-maps {
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 10px;
+  margin-top: 15px;
+}
+
+#map_pre, #map_post {
+  flex: 1;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+}
+
+.leaflet-container {
+  border-radius: 4px;
+  border: 1px solid #eee;
+}
+
+/* Plot and visualization styling */
+.shiny-plot-output {
+  background-color: white;
+  border-radius: 4px;
+  border: 1px solid #eee;
+  padding: 10px;
+  margin-top: 15px;
+}
+
+/* Adjustments for shinyWidgets elements */
+.btn-group-container-sw {
+  margin-bottom: 15px;
+}
+
+.btw.active {
+  background-color: var(--cnps-green) !important;
+  border-color: var(--cnps-dark-green) !important;
+  color: white !important;
+}
+
+/* Footer styling (if added) */
+.footer {
+  margin-top: 40px;
+  padding-top: 15px;
+  border-top: 1px solid #eee;
+  text-align: center;
+  color: var(--cnps-gray);
+  font-size: 12px;
+} 
