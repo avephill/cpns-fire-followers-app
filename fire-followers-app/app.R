@@ -11,6 +11,8 @@ library(ggplot2)
 library(patchwork)
 library(purrr)
 library(leafsync)
+library(tidyr)
+library(stringr)
 
 # Disable S2 geometry if needed
 sf_use_s2(FALSE)
@@ -121,7 +123,9 @@ ui <- fluidPage(
               selected = "Total Species",
               justified = TRUE,
               status = "primary"
-            )
+            ),
+            # New checkbox toggle for Relative Proportion (default off)
+            checkboxInput("relative_prop", "Display Relative Proportion", value = FALSE)
           )
         ),
         mainPanel(
@@ -141,6 +145,10 @@ ui <- fluidPage(
             tabPanel(
               "Species Richness Plot",
               plotOutput("richnessPlot")
+            ),
+            tabPanel(
+              "Top 10 Species",
+              plotOutput("top10Plot", height = "600px")
             )
           )
         )
@@ -308,7 +316,7 @@ server <- function(input, output, session) {
     fire_sf
   }) %>% bindCache(input$fire_select)
 
-  # Cache the species points data
+  # Cache the species points data (filtered by taxa)
   species_points <- reactive({
     req(input$fire_select, input$taxa_filter)
     print(paste("species_points: Retrieving species observations for fires =", paste(input$fire_select, collapse = ", ")))
@@ -348,6 +356,28 @@ server <- function(input, output, session) {
     sfc_points
   }) %>% bindCache(input$fire_select, input$taxa_filter)
 
+  # New reactive for all species points (without taxon filtering)
+  all_species_points <- reactive({
+    req(input$fire_select)
+    print(paste("all_species_points: Retrieving all species observations for fires =", paste(input$fire_select, collapse = ", ")))
+    spp_query <- tbl(con, "gbif_frap") %>%
+      filter(
+        FIRE_NAME %in% input$fire_select,
+        !is.na(latitude),
+        !is.na(longitude)
+      )
+    spp_df <- spp_query %>%
+      select(
+        id, latitude, longitude, observed_on, scientific_name,
+        taxon_class_name, taxon_family_name, taxon_genus_name, taxon_species_name
+      ) %>%
+      collect()
+    if (nrow(spp_df) == 0) {
+      return(NULL)
+    }
+    st_as_sf(spp_df, coords = c("longitude", "latitude"), crs = 4326)
+  }) %>% bindCache(input$fire_select)
+
   # Separate the species grid data by period
   species_grid_by_period <- reactive({
     req(input$count_type, input$time_range)
@@ -359,11 +389,11 @@ server <- function(input, output, session) {
     # Get fire date
     fire_info <- con %>%
       tbl("frap") %>%
-      filter(FIRE_NAME == !!input$fire_select[1]) %>% # Note the !! operator
+      filter(FIRE_NAME == !!input$fire_select[1]) %>%
       collect()
     fire_date <- as.Date(fire_info$ALARM_DATE[1])
 
-    # Split species points into pre and post fire
+    # Split species points into pre and post fire (filtered)
     spp_pre <- spp_sf %>% filter(as.Date(observed_on) < fire_date)
     spp_post <- spp_sf %>% filter(as.Date(observed_on) >= fire_date)
 
@@ -388,7 +418,7 @@ server <- function(input, output, session) {
         ungroup()
     }
 
-    # Calculate counts for both periods
+    # Calculate counts for both periods with a helper function
     count_points <- function(grid, points) {
       if (input$count_type == "Total Observations") {
         lengths(st_intersects(grid, points))
@@ -407,8 +437,20 @@ server <- function(input, output, session) {
     grid_pre$count <- count_points(grid_pre, spp_pre)
     grid_post$count <- count_points(grid_post, spp_post)
 
+    # If relative proportion is requested, recalc counts using all (unfiltered) points.
+    if (input$relative_prop) {
+      req(all_species_points())
+      all_pts <- all_species_points()
+      spp_pre_all <- all_pts %>% filter(as.Date(observed_on) < fire_date)
+      spp_post_all <- all_pts %>% filter(as.Date(observed_on) >= fire_date)
+      total_pre <- count_points(grid_pre, spp_pre_all)
+      total_post <- count_points(grid_post, spp_post_all)
+      grid_pre$count <- ifelse(total_pre > 0, grid_pre$count / total_pre, 0)
+      grid_post$count <- ifelse(total_post > 0, grid_post$count / total_post, 0)
+    }
+
     list(pre = grid_pre, post = grid_post, fire = fire_sf)
-  }) %>% bindCache(input$fire_select, input$taxa_filter, input$count_type, input$time_range)
+  }) %>% bindCache(input$fire_select, input$taxa_filter, input$count_type, input$time_range, input$relative_prop)
 
   # Create a shared color palette reactive
   shared_palette <- reactive({
@@ -419,7 +461,7 @@ server <- function(input, output, session) {
     colorNumeric("YlOrRd", domain = log1p(all_counts))
   })
 
-  # Render pre-fire map
+  # Render pre-fire and post-fire maps with synced view.
   output$sync_maps_ui <- renderUI({
     req(species_grid_by_period())
     print("Creating and syncing maps")
@@ -427,9 +469,26 @@ server <- function(input, output, session) {
 
     # Create shared color palette
     all_counts <- c(data$pre$count, data$post$count)
-    pal <- colorNumeric("YlOrRd", domain = log1p(all_counts))
+    pal <- if (input$relative_prop) {
+      colorNumeric("YlOrRd", domain = all_counts)
+    } else {
+      colorNumeric("YlOrRd", domain = log1p(all_counts))
+    }
 
-    # Create pre-fire map
+    # Pre-fire map
+    pre_label <- if (input$count_type == "Total Observations") {
+      if (input$relative_prop) {
+        ~ paste("Pre-fire Relative Proportion:", count)
+      } else {
+        ~ paste("Pre-fire Obs. Count:", count)
+      }
+    } else {
+      if (input$relative_prop) {
+        ~ paste("Pre-fire Relative Proportion:", count)
+      } else {
+        ~ paste("Pre-fire Species Count:", count)
+      }
+    }
     pre_map <- leaflet() %>%
       addTiles() %>%
       addControl(
@@ -444,35 +503,33 @@ server <- function(input, output, session) {
       ) %>%
       addPolygons(
         data = data$pre,
-        fillColor = ~ pal(log1p(count)),
+        fillColor = ~ if (input$relative_prop) pal(count) else pal(log1p(count)),
         fillOpacity = 0.7,
         color = "black",
         weight = 1,
-        label = if (input$count_type == "Total Observations") {
-          ~ paste("Pre-fire Obs. Count:", count)
-        } else {
-          ~ paste("Pre-fire Species Count:", count)
-        },
+        label = pre_label,
         highlightOptions = highlightOptions(
           weight = 2,
           color = "#666",
           fillOpacity = 0.7,
           bringToFront = TRUE
         )
-      ) # %>%
-    # addLegend(
-    #   position = "bottomright",
-    #   pal = pal,
-    #   values = log1p(all_counts),
-    #   labFormat = labelFormat(transform = function(x) round(expm1(x), 0)),
-    #   title = if (input$count_type == "Total Observations") {
-    #     "Observation Count"
-    #   } else {
-    #     "Species Count"
-    #   }
-    # )
+      )
 
-    # Create post-fire map
+    # Post-fire map
+    post_label <- if (input$count_type == "Total Observations") {
+      if (input$relative_prop) {
+        ~ paste("Post-fire Relative Proportion:", count)
+      } else {
+        ~ paste("Post-fire Obs. Count:", count)
+      }
+    } else {
+      if (input$relative_prop) {
+        ~ paste("Post-fire Relative Proportion:", count)
+      } else {
+        ~ paste("Post-fire Species Count:", count)
+      }
+    }
     post_map <- leaflet() %>%
       addTiles() %>%
       addControl(
@@ -487,15 +544,11 @@ server <- function(input, output, session) {
       ) %>%
       addPolygons(
         data = data$post,
-        fillColor = ~ pal(log1p(count)),
+        fillColor = ~ if (input$relative_prop) pal(count) else pal(log1p(count)),
         fillOpacity = 0.7,
         color = "black",
         weight = 1,
-        label = if (input$count_type == "Total Observations") {
-          ~ paste("Post-fire Obs. Count:", count)
-        } else {
-          ~ paste("Post-fire Species Count:", count)
-        },
+        label = post_label,
         highlightOptions = highlightOptions(
           weight = 2,
           color = "#666",
@@ -506,21 +559,21 @@ server <- function(input, output, session) {
       addLegend(
         position = "bottomright",
         pal = pal,
-        values = log1p(all_counts),
-        labFormat = labelFormat(transform = function(x) round(expm1(x), 0)),
-        title = if (input$count_type == "Total Observations") {
+        values = if (input$relative_prop) all_counts else log1p(all_counts),
+        labFormat = labelFormat(transform = if (input$relative_prop) identity else function(x) round(expm1(x), 0)),
+        title = if (input$relative_prop) {
+          "Relative Proportion"
+        } else if (input$count_type == "Total Observations") {
           "Observation Count"
         } else {
           "Species Count"
         }
       )
 
-    # Create a synchronized map view
+    # Synchronized maps
     sync_maps <- leafsync::sync(list(pre_map, post_map))
-
-    # Return the HTML widget
     sync_maps
-  }) %>% bindCache(input$fire_select, input$taxa_filter, input$count_type, input$time_range)
+  }) %>% bindCache(input$fire_select, input$taxa_filter, input$count_type, input$time_range, input$relative_prop)
 
   # --- Species Richness Data and Plot ---------------------------------------
   richness_data <- reactive({
@@ -529,7 +582,7 @@ server <- function(input, output, session) {
     # Use the alarm date from the first selected fire.
     fire_info <- con %>%
       tbl("frap") %>%
-      filter(FIRE_NAME == !!input$fire_select[1]) %>% # Note the !! operator
+      filter(FIRE_NAME == !!input$fire_select[1]) %>%
       collect()
     fire_date <- as.Date(fire_info$ALARM_DATE[1])
     print(paste("richness_data: Fire alarm date =", fire_date))
@@ -538,6 +591,7 @@ server <- function(input, output, session) {
     print(paste("richness_data: Selected date range =", start_date, "to", end_date))
     selected_fire_names <- input$fire_select
 
+    # Function to conditionally apply the taxon filter
     apply_taxon_filter <- function(qry) {
       if (!is.null(input$taxa_filter) && input$taxa_filter != "" && input$taxa_filter != "all") {
         split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
@@ -556,6 +610,7 @@ server <- function(input, output, session) {
       qry
     }
 
+    # Filtered counts (based on taxa selection)
     total_pre <- if (start_date < fire_date) {
       qry <- tbl(con, "gbif_frap") %>%
         filter(
@@ -565,14 +620,12 @@ server <- function(input, output, session) {
         )
       qry <- apply_taxon_filter(qry)
       qry %>%
-        summarize(richness = n_distinct(scientific_name)) %>%
+        summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
         collect() %>%
-        pull(richness)
+        pull(val)
     } else {
       0
     }
-    print(paste("richness_data: Total pre-fire richness =", total_pre))
-
     total_post <- if (end_date >= fire_date) {
       qry <- tbl(con, "gbif_frap") %>%
         filter(
@@ -582,55 +635,53 @@ server <- function(input, output, session) {
         )
       qry <- apply_taxon_filter(qry)
       qry %>%
-        summarize(richness = n_distinct(scientific_name)) %>%
+        summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
         collect() %>%
-        pull(richness)
+        pull(val)
     } else {
       0
     }
-    print(paste("richness_data: Total post-fire richness =", total_post))
 
-    obs_pre <- if (start_date < fire_date) {
-      qry <- tbl(con, "gbif_frap") %>%
+    # Unfiltered totals (all taxa) for the same period
+    total_pre_all <- if (start_date < fire_date) {
+      tbl(con, "gbif_frap") %>%
         filter(
           FIRE_NAME %in% selected_fire_names,
           observed_on >= start_date,
           observed_on < fire_date
-        )
-      qry <- apply_taxon_filter(qry)
-      qry %>%
-        summarize(obs = n()) %>%
+        ) %>%
+        summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
         collect() %>%
-        pull(obs)
+        pull(val)
     } else {
       0
     }
-    obs_post <- if (end_date >= fire_date) {
-      qry <- tbl(con, "gbif_frap") %>%
+    total_post_all <- if (end_date >= fire_date) {
+      tbl(con, "gbif_frap") %>%
         filter(
           FIRE_NAME %in% selected_fire_names,
           observed_on >= fire_date,
           observed_on <= end_date
-        )
-      qry <- apply_taxon_filter(qry)
-      qry %>%
-        summarize(obs = n()) %>%
+        ) %>%
+        summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
         collect() %>%
-        pull(obs)
+        pull(val)
     } else {
       0
     }
-    print("richness_data: Finished calculating richness data.")
 
-    if (input$count_type == "Total Species") {
+    # If relative proportion is on, compute ratio; otherwise use filtered raw numbers.
+    if (input$relative_prop) {
+      value_pre <- if (total_pre_all > 0) total_pre / total_pre_all else 0
+      value_post <- if (total_post_all > 0) total_post / total_post_all else 0
       df <- data.frame(
         Period = c("Pre-fire", "Post-fire"),
-        Count = c(total_pre, total_post)
+        Count = c(value_pre, value_post)
       )
     } else {
       df <- data.frame(
         Period = c("Pre-fire", "Post-fire"),
-        Count = c(obs_pre, obs_post)
+        Count = c(total_pre, total_post)
       )
     }
     df <- df %>% mutate(Period = factor(Period, levels = c("Pre-fire", "Post-fire")))
@@ -654,10 +705,161 @@ server <- function(input, output, session) {
       ) +
       labs(
         title = ifelse(input$count_type == "Total Species", "Total Species Richness", "Total Observations"),
-        y = ifelse(input$count_type == "Total Species", "Number of Unique Species", "Number of Observations"),
+        y = ifelse(input$relative_prop, "Relative Proportion", ifelse(input$count_type == "Total Species", "Number of Unique Species", "Number of Observations")),
         x = ""
       )
     p
+  })
+
+  # --- Top 10 Species Data and Plot -----------------------------------------
+  top10_data <- reactive({
+    req(input$count_type, input$fire_select)
+    print("top10_data: Calculating top 10 species data.")
+
+    # Get fire date from first selected fire
+    fire_info <- con %>%
+      tbl("frap") %>%
+      filter(FIRE_NAME == !!input$fire_select[1]) %>%
+      collect()
+    fire_date <- as.Date(fire_info$ALARM_DATE[1])
+    start_date <- as.Date(input$time_range[1])
+    end_date <- as.Date(input$time_range[2])
+    selected_fire_names <- input$fire_select
+
+    # Base query with fire and date filters
+    base_query <- tbl(con, "gbif_frap") %>%
+      filter(FIRE_NAME %in% selected_fire_names)
+
+    # Apply taxa filter if specified
+    if (!is.null(input$taxa_filter) && input$taxa_filter != "" && input$taxa_filter != "all") {
+      split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
+      level <- split_val[1]
+      value <- split_val[2]
+      base_query <- switch(level,
+        "class" = base_query %>% filter(taxon_class_name == value),
+        "family" = base_query %>% filter(taxon_family_name == value),
+        "genus" = base_query %>% filter(taxon_genus_name == value),
+        "species" = base_query %>% filter(taxon_species_name == value),
+        base_query
+      )
+    }
+
+    # Get pre-fire data
+    pre_fire <- if (start_date < fire_date) {
+      base_query %>%
+        filter(
+          observed_on >= start_date,
+          observed_on < fire_date
+        ) %>%
+        group_by(scientific_name) %>%
+        summarize(
+          count = if (input$count_type == "Total Species") n_distinct(scientific_name) else n(),
+          .groups = "drop"
+        ) %>%
+        collect()
+    } else {
+      data.frame(scientific_name = character(0), count = numeric(0))
+    }
+    pre_fire$period <- "Pre-fire"
+
+    # Get post-fire data
+    post_fire <- if (end_date >= fire_date) {
+      base_query %>%
+        filter(
+          observed_on >= fire_date,
+          observed_on <= end_date
+        ) %>%
+        group_by(scientific_name) %>%
+        summarize(
+          count = if (input$count_type == "Total Species") n_distinct(scientific_name) else n(),
+          .groups = "drop"
+        ) %>%
+        collect()
+    } else {
+      data.frame(scientific_name = character(0), count = numeric(0))
+    }
+    post_fire$period <- "Post-fire"
+
+    # Combine and get top 10 species across both periods
+    combined <- bind_rows(pre_fire, post_fire)
+    top_species <- combined %>%
+      group_by(scientific_name) %>%
+      summarize(total_count = sum(count)) %>%
+      arrange(desc(total_count)) %>%
+      slice_head(n = 10) %>%
+      pull(scientific_name)
+
+    # Filter for only top 10 species and ensure both periods are represented
+    result <- combined %>%
+      filter(scientific_name %in% top_species) %>%
+      complete(scientific_name = top_species, period = c("Pre-fire", "Post-fire"), fill = list(count = 0))
+
+    # If relative proportion is requested, calculate percentages
+    if (input$relative_prop) {
+      result <- result %>%
+        group_by(period) %>%
+        mutate(
+          total = sum(count),
+          count = if (total > 0) count / total else 0
+        ) %>%
+        select(-total) %>%
+        ungroup()
+    }
+
+    # Reorder factors for plotting
+    result %>%
+      mutate(
+        scientific_name = factor(scientific_name, levels = top_species),
+        period = factor(period, levels = c("Pre-fire", "Post-fire"))
+      )
+  })
+
+  # Render the Top 10 Plot
+  output$top10Plot <- renderPlot({
+    req(input$count_type)
+
+    if (input$count_type == "Total Species") {
+      # Create a blank plot with just text
+      ggplot() +
+        annotate("text",
+          x = 0.5, y = 0.5,
+          label = "Please select 'Observations' from the Display Count options\nin the sidebar to view the top 10 species.",
+          size = 6
+        ) +
+        theme_void() +
+        xlim(0, 1) +
+        ylim(0, 1)
+    } else {
+      req(top10_data())
+      print("output$top10Plot: Rendering top 10 species plot.")
+
+      period_colors <- c("Pre-fire" = "#68C6C0", "Post-fire" = "#dd5858")
+
+      p <- ggplot(top10_data(), aes(x = scientific_name, y = count, fill = period)) +
+        geom_bar(stat = "identity", position = "dodge") +
+        scale_fill_manual(values = period_colors) +
+        theme_minimal() +
+        theme(
+          axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 14),
+          plot.title = element_text(size = 16, face = "bold"),
+          legend.title = element_blank(),
+          legend.position = "top"
+        ) +
+        labs(
+          title = "Top 10 Observed Species",
+          x = "Species",
+          y = if (input$relative_prop) "Relative Proportion" else "Count"
+        )
+
+      # If the names are too long, try to wrap them
+      if (any(nchar(levels(top10_data()$scientific_name)) > 30)) {
+        p <- p + scale_x_discrete(labels = function(x) str_wrap(x, width = 30))
+      }
+
+      p
+    }
   })
 
   # Close the DuckDB connection when the session ends.
