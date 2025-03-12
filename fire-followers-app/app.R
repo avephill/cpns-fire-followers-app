@@ -176,22 +176,39 @@ server <- function(input, output, session) {
   # Render the time range slider UI using the alarm date from the first selected fire.
   output$time_range_ui <- renderUI({
     req(input$fire_select)
-    # Use the first selected fire
-    selected_fire_name <- input$fire_select[1]
+    # Get all selected fires
+    selected_fire_names <- input$fire_select
     fire_info <- con %>%
       tbl("frap") %>%
-      filter(FIRE_NAME == selected_fire_name) %>%
+      filter(FIRE_NAME %in% selected_fire_names) %>%
+      # For each fire, get the record with the largest GIS_ACRES
+      group_by(FIRE_NAME) %>%
+      slice_max(GIS_ACRES, with_ties = FALSE) %>%
       collect()
     if (nrow(fire_info) == 0) {
       return(NULL)
     }
-    alarm_date <- as.Date(fire_info$ALARM_DATE[1])
+
+    # Get all fire names and their alarm dates (now using the largest fire records)
+    fire_dates <- fire_info %>%
+      select(FIRE_NAME, ALARM_DATE, GIS_ACRES) %>%
+      distinct() %>%
+      mutate(ALARM_DATE = as.Date(ALARM_DATE)) %>%
+      arrange(ALARM_DATE)
+
+    # Format for display
+    date_strings <- paste(fire_dates$FIRE_NAME, ":", fire_dates$ALARM_DATE)
+    dates_html <- paste(date_strings, collapse = ", ")
+
+    # Use the first fire's date for slider range calculation
+    alarm_date <- fire_dates$ALARM_DATE[1]
     new_start <- alarm_date - (365 * 4)
     new_end <- alarm_date + (365 * 4)
+
     sliderInput("time_range",
       label = HTML(paste(
         "Select date range for observations", "<br>",
-        "<span style='font-weight:normal; font-style:italic;'>Fire alarm date:", alarm_date, "</span>"
+        "<span style='font-weight:normal; font-style:italic;'>Fire alarm dates: ", dates_html, "</span>"
       )),
       min = as.Date("2015-01-01"),
       max = Sys.Date(),
@@ -323,14 +340,23 @@ server <- function(input, output, session) {
 
   # Cache the species points data (filtered by taxa)
   species_points <- reactive({
-    req(input$fire_select, input$taxa_filter)
+    req(input$fire_select, input$taxa_filter, input$time_range)
     print(paste("species_points: Retrieving species observations for fires =", paste(input$fire_select, collapse = ", ")))
+
+    # Get the time range values
+    start_date <- as.Date(input$time_range[1])
+    end_date <- as.Date(input$time_range[2])
+
     spp_query <- tbl(con, "gbif_frap") %>%
       filter(
         FIRE_NAME %in% input$fire_select,
         !is.na(latitude),
-        !is.na(longitude)
+        !is.na(longitude),
+        # Add time range filter
+        observed_on >= start_date,
+        observed_on <= end_date
       )
+
     if (!is.null(input$taxa_filter) && input$taxa_filter != "" && input$taxa_filter != "all") {
       split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
       level <- split_val[1]
@@ -359,17 +385,25 @@ server <- function(input, output, session) {
     sfc_points <- st_as_sf(spp_df, coords = c("longitude", "latitude"), crs = 4326)
     print("species_points: Converted species observations to sf object.")
     sfc_points
-  }) %>% bindCache(input$fire_select, input$taxa_filter)
+  }) %>% bindCache(input$fire_select, input$taxa_filter, input$time_range)
 
   # New reactive for all species points (without taxon filtering)
   all_species_points <- reactive({
-    req(input$fire_select)
+    req(input$fire_select, input$time_range)
     print(paste("all_species_points: Retrieving all species observations for fires =", paste(input$fire_select, collapse = ", ")))
+
+    # Get the time range values
+    start_date <- as.Date(input$time_range[1])
+    end_date <- as.Date(input$time_range[2])
+
     spp_query <- tbl(con, "gbif_frap") %>%
       filter(
         FIRE_NAME %in% input$fire_select,
         !is.na(latitude),
-        !is.na(longitude)
+        !is.na(longitude),
+        # Add time range filter
+        observed_on >= start_date,
+        observed_on <= end_date
       )
     spp_df <- spp_query %>%
       select(
@@ -381,7 +415,7 @@ server <- function(input, output, session) {
       return(NULL)
     }
     st_as_sf(spp_df, coords = c("longitude", "latitude"), crs = 4326)
-  }) %>% bindCache(input$fire_select)
+  }) %>% bindCache(input$fire_select, input$time_range)
 
   # Separate the species grid data by period
   species_grid_by_period <- reactive({
