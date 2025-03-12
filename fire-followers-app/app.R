@@ -125,7 +125,12 @@ ui <- fluidPage(
               status = "primary"
             ),
             # New checkbox toggle for Relative Proportion (default off)
-            checkboxInput("relative_prop", "Display Relative Proportion", value = FALSE)
+            checkboxInput("relative_prop", "Display Relative Proportion", value = FALSE),
+            # Add HTML output to display the denominator values
+            conditionalPanel(
+              condition = "input.relative_prop == true",
+              htmlOutput("proportion_info", style = "padding-left: 20px; color: #666; font-style: italic;")
+            )
           )
         ),
         mainPanel(
@@ -610,8 +615,8 @@ server <- function(input, output, session) {
       qry
     }
 
-    # Filtered counts (based on taxa selection)
-    total_pre <- if (start_date < fire_date) {
+    # Get pre-fire data grouped by severity
+    pre_fire_by_severity <- if (start_date < fire_date) {
       qry <- tbl(con, "gbif_frap") %>%
         filter(
           FIRE_NAME %in% selected_fire_names,
@@ -619,14 +624,32 @@ server <- function(input, output, session) {
           observed_on < fire_date
         )
       qry <- apply_taxon_filter(qry)
-      qry %>%
+
+      # Group by severity and calculate counts
+      counts <- qry %>%
+        group_by(mtbs_fire_severity) %>%
+        summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
+        collect()
+
+      # Get total across all severities for pre-fire
+      total_pre <- qry %>%
         summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
         collect() %>%
         pull(val)
+
+      # Add total row and handle NA values
+      counts <- counts %>%
+        mutate(mtbs_fire_severity = ifelse(is.na(mtbs_fire_severity), "No Data", as.character(mtbs_fire_severity)))
+
+      total_row <- data.frame(mtbs_fire_severity = "All", val = total_pre)
+      bind_rows(total_row, counts) %>%
+        mutate(Period = "Pre-fire")
     } else {
-      0
+      data.frame(mtbs_fire_severity = character(0), val = numeric(0), Period = character(0))
     }
-    total_post <- if (end_date >= fire_date) {
+
+    # Get post-fire data grouped by severity
+    post_fire_by_severity <- if (end_date >= fire_date) {
       qry <- tbl(con, "gbif_frap") %>%
         filter(
           FIRE_NAME %in% selected_fire_names,
@@ -634,80 +657,125 @@ server <- function(input, output, session) {
           observed_on <= end_date
         )
       qry <- apply_taxon_filter(qry)
-      qry %>%
+
+      # Group by severity and calculate counts
+      counts <- qry %>%
+        group_by(mtbs_fire_severity) %>%
+        summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
+        collect()
+
+      # Get total across all severities for post-fire
+      total_post <- qry %>%
         summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
         collect() %>%
         pull(val)
+
+      # Add total row and handle NA values
+      counts <- counts %>%
+        mutate(mtbs_fire_severity = ifelse(is.na(mtbs_fire_severity), "No Data", as.character(mtbs_fire_severity)))
+
+      total_row <- data.frame(mtbs_fire_severity = "All", val = total_post)
+      bind_rows(total_row, counts) %>%
+        mutate(Period = "Post-fire")
     } else {
-      0
+      data.frame(mtbs_fire_severity = character(0), val = numeric(0), Period = character(0))
     }
 
-    # Unfiltered totals (all taxa) for the same period
-    total_pre_all <- if (start_date < fire_date) {
-      tbl(con, "gbif_frap") %>%
-        filter(
-          FIRE_NAME %in% selected_fire_names,
-          observed_on >= start_date,
-          observed_on < fire_date
-        ) %>%
-        summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
-        collect() %>%
-        pull(val)
-    } else {
-      0
-    }
-    total_post_all <- if (end_date >= fire_date) {
-      tbl(con, "gbif_frap") %>%
-        filter(
-          FIRE_NAME %in% selected_fire_names,
-          observed_on >= fire_date,
-          observed_on <= end_date
-        ) %>%
-        summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
-        collect() %>%
-        pull(val)
-    } else {
-      0
-    }
+    # Combine pre and post fire data
+    combined_data <- bind_rows(pre_fire_by_severity, post_fire_by_severity) %>%
+      rename(Count = val, Severity = mtbs_fire_severity)
 
-    # If relative proportion is on, compute ratio; otherwise use filtered raw numbers.
+    # If relative proportion is requested, compute ratios
     if (input$relative_prop) {
-      value_pre <- if (total_pre_all > 0) total_pre / total_pre_all else 0
-      value_post <- if (total_post_all > 0) total_post / total_post_all else 0
-      df <- data.frame(
-        Period = c("Pre-fire", "Post-fire"),
-        Count = c(value_pre, value_post)
-      )
-    } else {
-      df <- data.frame(
-        Period = c("Pre-fire", "Post-fire"),
-        Count = c(total_pre, total_post)
-      )
+      # Get unfiltered totals for the same period
+      total_pre_all <- if (start_date < fire_date) {
+        tbl(con, "gbif_frap") %>%
+          filter(
+            FIRE_NAME %in% selected_fire_names,
+            observed_on >= start_date,
+            observed_on < fire_date
+          ) %>%
+          summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
+          collect() %>%
+          pull(val)
+      } else {
+        0
+      }
+
+      total_post_all <- if (end_date >= fire_date) {
+        tbl(con, "gbif_frap") %>%
+          filter(
+            FIRE_NAME %in% selected_fire_names,
+            observed_on >= fire_date,
+            observed_on <= end_date
+          ) %>%
+          summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
+          collect() %>%
+          pull(val)
+      } else {
+        0
+      }
+
+      # Calculate relative proportions
+      combined_data <- combined_data %>%
+        mutate(
+          Count = case_when(
+            Period == "Pre-fire" & total_pre_all > 0 ~ Count / total_pre_all,
+            Period == "Post-fire" & total_post_all > 0 ~ Count / total_post_all,
+            TRUE ~ 0
+          )
+        )
     }
-    df <- df %>% mutate(Period = factor(Period, levels = c("Pre-fire", "Post-fire")))
-    df
+
+    # Arrange severity levels with "All" first
+    severity_order <- c("All", "1", "2", "3", "4", "5", "6", "No Data")
+    combined_data <- combined_data %>%
+      mutate(
+        Period = factor(Period, levels = c("Pre-fire", "Post-fire")),
+        Severity = factor(Severity, levels = severity_order)
+      ) %>%
+      arrange(Severity, Period)
+
+    combined_data
   })
 
   # --- Render the Richness Plot -----------------------------------------------
   output$richnessPlot <- renderPlot({
     req(richness_data())
-    print("output$richnessPlot: Rendering species richness plot.")
+    print("output$richnessPlot: Rendering species richness plot with severity breakdown.")
     rd <- richness_data()
+
+    # Define colors for pre-fire and post-fire periods (same as original)
     period_colors <- c("Pre-fire" = "#68C6C0", "Post-fire" = "#dd5858")
-    p <- ggplot(rd, aes(x = Period, y = Count, fill = Period)) +
-      geom_bar(stat = "identity") +
+
+    # Create the plot with severity on x-axis and period as fill color
+    p <- ggplot(rd, aes(x = Severity, y = Count, fill = Period)) +
+      geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
       scale_fill_manual(values = period_colors) +
       theme_minimal() +
       theme(
-        axis.text = element_text(size = 14),
-        axis.title = element_text(size = 16),
-        plot.title = element_text(size = 18, face = "bold")
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        axis.text.y = element_text(size = 12),
+        axis.title = element_text(size = 14),
+        plot.title = element_text(size = 16, face = "bold"),
+        legend.title = element_blank(),
+        legend.position = "top"
       ) +
       labs(
-        title = ifelse(input$count_type == "Total Species", "Total Species Richness", "Total Observations"),
-        y = ifelse(input$relative_prop, "Relative Proportion", ifelse(input$count_type == "Total Species", "Number of Unique Species", "Number of Observations")),
-        x = ""
+        title = ifelse(input$count_type == "Total Species",
+          "Species Richness by Fire Severity",
+          "Observations by Fire Severity"
+        ),
+        y = ifelse(input$relative_prop,
+          "Relative Proportion",
+          ifelse(input$count_type == "Total Species",
+            "Number of Unique Species",
+            "Number of Observations"
+          )
+        ),
+        x = "Fire Severity"
       )
+
     p
   })
 
@@ -796,14 +864,19 @@ server <- function(input, output, session) {
 
     # If relative proportion is requested, calculate percentages
     if (input$relative_prop) {
+      # Fix: Calculate total sums first
+      pre_total <- sum(result$count[result$period == "Pre-fire"])
+      post_total <- sum(result$count[result$period == "Post-fire"])
+
+      # Then apply the proportions
       result <- result %>%
-        group_by(period) %>%
         mutate(
-          total = sum(count),
-          count = if (total > 0) count / total else 0
-        ) %>%
-        select(-total) %>%
-        ungroup()
+          count = case_when(
+            period == "Pre-fire" & pre_total > 0 ~ count / pre_total,
+            period == "Post-fire" & post_total > 0 ~ count / post_total,
+            TRUE ~ 0
+          )
+        )
     }
 
     # Reorder factors for plotting
@@ -860,6 +933,60 @@ server <- function(input, output, session) {
 
       p
     }
+  })
+
+  # Add new output to display denominator information for proportions
+  output$proportion_info <- renderUI({
+    req(input$fire_select, input$time_range)
+
+    # Use the alarm date from the first selected fire
+    fire_info <- con %>%
+      tbl("frap") %>%
+      filter(FIRE_NAME == !!input$fire_select[1]) %>%
+      collect()
+    fire_date <- as.Date(fire_info$ALARM_DATE[1])
+    start_date <- as.Date(input$time_range[1])
+    end_date <- as.Date(input$time_range[2])
+    selected_fire_names <- input$fire_select
+
+    # Calculate total denominators
+    total_pre_all <- if (start_date < fire_date) {
+      tbl(con, "gbif_frap") %>%
+        filter(
+          FIRE_NAME %in% selected_fire_names,
+          observed_on >= start_date,
+          observed_on < fire_date
+        ) %>%
+        summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
+        collect() %>%
+        pull(val)
+    } else {
+      0
+    }
+
+    total_post_all <- if (end_date >= fire_date) {
+      tbl(con, "gbif_frap") %>%
+        filter(
+          FIRE_NAME %in% selected_fire_names,
+          observed_on >= fire_date,
+          observed_on <= end_date
+        ) %>%
+        summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
+        collect() %>%
+        pull(val)
+    } else {
+      0
+    }
+
+    # Determine what type of counts we're showing
+    count_type_text <- if (input$count_type == "Total Species") "species" else "observations"
+
+    # Create HTML output with the total values
+    HTML(paste0(
+      "Denominator totals:<br>",
+      "Pre-fire: ", total_pre_all, " ", count_type_text, "<br>",
+      "Post-fire: ", total_post_all, " ", count_type_text
+    ))
   })
 
   # Close the DuckDB connection when the session ends.
