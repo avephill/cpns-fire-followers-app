@@ -65,7 +65,7 @@ dcon |> dbDisconnect(shutdown = T)
 
 # --- Move to shiny -----------------------------------------------------------
 # Connect to a new shiny database
-scon <- dbConnect(duckdb(dbdir = "shiny/data/shiny.db"))
+scon <- dbConnect(duckdb(dbdir = "data/shiny.db"))
 scon |> dbExecute("INSTALL spatial; LOAD spatial;")
 
 # Attach the working database instead of copying it
@@ -93,6 +93,62 @@ WHERE FIRE_NAME IN ('%s'))
 # Verify the new tables in shiny.db
 scon |> dbExecute("DETACH workingdb")
 scon |> dbListTables()
+
+# Add MTBS to local ---------------------------------------
+library(terra)
+mtbs <- rast("~/Data/Environment/MTBS/MTBS_1984-2021.tif")
+
+mtbs2020 <- mtbs[["mtbs_CA_2020"]]
+
+writeRaster(mtbs2020, "fire-followers-app/data/mtbs_2020.tif")
+
+plot(mtbs2020)
+
+# Add MTBS to gbif_frap table in database ---------------------------------------
+
+# Extract the points from the gbif_frap table
+gbif_points <- scon |>
+  tbl("gbif_frap") |>
+  select(id, longitude, latitude) |>
+  collect()
+
+# Create SpatVector from points
+points_sf <- st_as_sf(gbif_points, coords = c("longitude", "latitude"), crs = 4326)
+points_vect <- vect(points_sf)
+
+# Load the MTBS raster
+mtbs2020 <- rast("fire-followers-app/data/mtbs_2020.tif")
+
+# Extract values from raster at each point
+severity_values <- terra::extract(mtbs2020, points_vect)
+
+# Add the fire severity values to the points dataframe
+gbif_points$mtbs_fire_severity <- severity_values[, 2] # column 2 should have the values
+
+# Update the database with the new column
+# First, create a temporary table with the ID and severity value
+dbWriteTable(scon, "temp_severity",
+  gbif_points |> select(id, mtbs_fire_severity),
+  overwrite = TRUE
+)
+
+# Then, update the main table with these values
+scon |> dbExecute("
+ALTER TABLE gbif_frap ADD COLUMN IF NOT EXISTS mtbs_fire_severity INTEGER;
+UPDATE gbif_frap
+SET mtbs_fire_severity = t.mtbs_fire_severity
+FROM temp_severity t
+WHERE gbif_frap.id = t.id;
+")
+
+# Clean up temporary table
+scon |> dbExecute("DROP TABLE IF EXISTS temp_severity;")
+
+# Verify the new column exists
+scon |>
+  tbl("gbif_frap") |>
+  filter(mtbs_fire_severity == 1, 2) |>
+  select(mtbs_fire_severity, scientific_name)
 
 # Disconnect from the database
 scon |> dbDisconnect(shutdown = TRUE)
