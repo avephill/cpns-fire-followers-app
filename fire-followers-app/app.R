@@ -68,7 +68,7 @@ ui <- fluidPage(
     "
   )),
 
-  # Tabset: 'Select Fire' and 'Species Richness'
+  # Tabset: 'Select Fire', 'Biodiversity Insights', and 'About'
   tabsetPanel(
     id = "tabs",
     tabPanel(
@@ -76,7 +76,7 @@ ui <- fluidPage(
       leafletOutput("fireMap", height = 600)
     ),
     tabPanel(
-      "Species Richness",
+      "Biodiversity Insights",
       sidebarLayout(
         # Decrease sidebar width by setting width = 3
         sidebarPanel(
@@ -138,7 +138,7 @@ ui <- fluidPage(
           tabsetPanel(
             id = "richness_tabs",
             tabPanel(
-              "Fire Insights Map",
+              "Density Maps",
               fluidRow(
                 column(
                   12,
@@ -148,7 +148,7 @@ ui <- fluidPage(
               )
             ),
             tabPanel(
-              "Species Richness Plot",
+              "Fire Severity Barplot",
               plotOutput("richnessPlot")
             ),
             tabPanel(
@@ -158,18 +158,73 @@ ui <- fluidPage(
           )
         )
       )
+    ),
+    tabPanel(
+      "About",
+      fluidRow(
+        column(10,
+          offset = 1,
+          br(),
+          p("The CNPS Fire Followers Explorer is an interactive application designed to explore plant biodiversity
+            patterns before and after wildfire events in California using data from the CNPS California Fire Followers 2020 project. This tool allows users to visualize and analyze
+            how plant communities respond to fires of different severities and how species composition changes over time."),
+          p(
+            "This application was developed as a joint collaboration between the",
+            tags$b("California Native Plant Society"), "and",
+            tags$b("Avery Hill"), "at the California Academy of Sciences."
+          ),
+          h3("Data Sources"),
+          tags$ul(
+            tags$li(
+              "Observation data was accessed from the iNaturalist project: ",
+              tags$a(
+                href = "https://www.inaturalist.org/projects/california-fire-followers-2020-data-management",
+                "California Fire Followers 2020", target = "_blank"
+              )
+            ),
+            tags$li(
+              "Fire perimeter data came from the California Department of Forestry and Fire Protection: ",
+              tags$a(
+                href = "https://www.fire.ca.gov/what-we-do/fire-resource-assessment-program/fire-perimeters",
+                "Fire Resource Assessment Program", target = "_blank"
+              )
+            ),
+            tags$li(
+              "Fire severity data came from the Monitoring Trends in Burn Severity (MTBS) project: ",
+              tags$a(
+                href = "https://www.mtbs.gov/index.php/project-overview",
+                "MTBS Project Overview", target = "_blank"
+              )
+            )
+          ),
+          h3("Technical Details"),
+          p("This application was built using R Shiny, an open-source framework for building interactive web
+            applications. It uses DuckDB for efficient data storage and processing, and various spatial libraries
+            for visualization and analysis."),
+          p(tags$a(
+            href = "https://github.com/avephill/cpns-fire-followers-app",
+            "View project on GitHub", target = "_blank"
+          )),
+          br(),
+          hr(),
+          p(
+            style = "color: #666; font-style: italic;",
+            "Created: ", format(Sys.Date(), "%B %Y")
+          )
+        )
+      )
     )
   )
 )
 
 # --- Define the Server -------------------------------------------------------
 server <- function(input, output, session) {
-  # Observer to disable/enable the Species Richness tab based on fire selection.
+  # Observer to disable/enable the Biodiversity Insights tab based on fire selection.
   observe({
     if (is.null(input$fire_select) || length(input$fire_select) == 0) {
-      shinyjs::runjs("$('#tabs li a:contains(\"Species Richness\")').addClass('disabled').css({'pointer-events': 'none', 'opacity': '0.5'});")
+      shinyjs::runjs("$('#tabs li a:contains(\"Biodiversity Insights\")').addClass('disabled').css({'pointer-events': 'none', 'opacity': '0.5'});")
     } else {
-      shinyjs::runjs("$('#tabs li a:contains(\"Species Richness\")').removeClass('disabled').css({'pointer-events': 'auto', 'opacity': '1'});")
+      shinyjs::runjs("$('#tabs li a:contains(\"Biodiversity Insights\")').removeClass('disabled').css({'pointer-events': 'auto', 'opacity': '1'});")
     }
   })
 
@@ -301,8 +356,8 @@ server <- function(input, output, session) {
     current <- isolate(input$fire_select)
     new_selection <- unique(c(current, selected_fire_name))
     updateSelectizeInput(session, "fire_select", selected = new_selection)
-    # Automatically switch to the Species Richness tab.
-    updateTabsetPanel(session, "tabs", selected = "Species Richness")
+    # Automatically switch to the Biodiversity Insights tab.
+    updateTabsetPanel(session, "tabs", selected = "Biodiversity Insights")
   })
 
   # Cache the fire data since it's expensive to compute
