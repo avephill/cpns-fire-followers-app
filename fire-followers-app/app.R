@@ -10,6 +10,7 @@ library(leaflet)
 library(ggplot2)
 library(patchwork)
 library(purrr)
+library(leafsync)
 
 # Disable S2 geometry if needed
 sf_use_s2(FALSE)
@@ -41,6 +42,15 @@ ui <- fluidPage(
       /* Add white background to sidebarPanel */
       .well.sidebar {
         background-color: white;
+      }
+      /* Force maps to be side by side */
+      #sync-maps {
+        display: flex !important;
+        flex-direction: row !important;
+        gap: 10px;
+      }
+      #map_pre, #map_post {
+        flex: 1;
       }
     "))
   ),
@@ -120,7 +130,13 @@ ui <- fluidPage(
             id = "richness_tabs",
             tabPanel(
               "Fire Insights Map",
-              leafletOutput("map", height = 600)
+              fluidRow(
+                column(
+                  12,
+                  h4("Pre-fire vs Post-fire Comparison"),
+                  htmlOutput("sync_maps_ui", height = "600px")
+                )
+              )
             ),
             tabPanel(
               "Species Richness Plot",
@@ -332,17 +348,29 @@ server <- function(input, output, session) {
     sfc_points
   }) %>% bindCache(input$fire_select, input$taxa_filter)
 
-  # Cache the grid calculations
-  species_grid <- reactive({
-    req(input$count_type)
-    print("species_grid: Triggered.")
+  # Separate the species grid data by period
+  species_grid_by_period <- reactive({
+    req(input$count_type, input$time_range)
+    print("species_grid_by_period: Triggered.")
     fire_sf <- selected_fire()
     spp_sf <- species_points()
     req(fire_sf, spp_sf)
+
+    # Get fire date
+    fire_info <- con %>%
+      tbl("frap") %>%
+      filter(FIRE_NAME == !!input$fire_select[1]) %>% # Note the !! operator
+      collect()
+    fire_date <- as.Date(fire_info$ALARM_DATE[1])
+
+    # Split species points into pre and post fire
+    spp_pre <- spp_sf %>% filter(as.Date(observed_on) < fire_date)
+    spp_post <- spp_sf %>% filter(as.Date(observed_on) >= fire_date)
+
+    # Create grids for both periods
     fire_bbox <- st_bbox(fire_sf)
-    print(paste("species_grid: Fire bounding box =", paste(names(fire_bbox), round(fire_bbox, 2), collapse = ", ")))
     cell_size <- max(fire_bbox$xmax - fire_bbox$xmin, fire_bbox$ymax - fire_bbox$ymin) / 20
-    print(paste("species_grid: Calculated cell size =", cell_size))
+
     grid <- st_make_grid(fire_sf, cellsize = cell_size, square = TRUE)
     grid_sf <- st_sf(geometry = grid) %>%
       st_make_valid() %>%
@@ -360,70 +388,139 @@ server <- function(input, output, session) {
         ungroup()
     }
 
-    print(paste("species_grid: Number of grid cells after intersection =", nrow(grid_sf)))
-
-    if (input$count_type == "Total Observations") {
-      counts <- lengths(st_intersects(grid_sf, spp_sf))
-    } else { # Total Species
-      counts <- sapply(st_intersects(grid_sf, spp_sf), function(idxs) {
-        if (length(idxs) == 0) {
-          return(0)
-        }
-        length(unique(spp_sf$scientific_name[idxs]))
-      })
+    # Calculate counts for both periods
+    count_points <- function(grid, points) {
+      if (input$count_type == "Total Observations") {
+        lengths(st_intersects(grid, points))
+      } else {
+        sapply(st_intersects(grid, points), function(idxs) {
+          if (length(idxs) == 0) {
+            return(0)
+          }
+          length(unique(points$scientific_name[idxs]))
+        })
+      }
     }
-    grid_sf$count <- counts
-    print("species_grid: Computed species counts for each grid cell.")
-    grid_sf
-  }) %>% bindCache(input$fire_select, input$taxa_filter, input$count_type)
 
-  # Modify the map output to use bindCache
-  output$map <- renderLeaflet({
-    req(selected_fire(), species_grid(), input$count_type)
-    print("output$map: Rendering fire insights map.")
-    fire_sf <- selected_fire()
-    grid_sf <- species_grid()
-    pal <- colorNumeric("YlOrRd", domain = log1p(grid_sf$count))
+    grid_pre <- grid_sf
+    grid_post <- grid_sf
+    grid_pre$count <- count_points(grid_pre, spp_pre)
+    grid_post$count <- count_points(grid_post, spp_post)
 
-    popup_text <- if (input$count_type == "Total Observations") {
-      ~ paste("Obs. Count:", count)
-    } else {
-      ~ paste("Species Count:", count)
-    }
-    legend_title <- if (input$count_type == "Total Observations") {
-      "Observation Count"
-    } else {
-      "Species Count"
-    }
-    # browser()
+    list(pre = grid_pre, post = grid_post, fire = fire_sf)
+  }) %>% bindCache(input$fire_select, input$taxa_filter, input$count_type, input$time_range)
 
-    leaflet() %>%
+  # Create a shared color palette reactive
+  shared_palette <- reactive({
+    req(species_grid_by_period())
+    data <- species_grid_by_period()
+    # Combine counts from both periods to get full range
+    all_counts <- c(data$pre$count, data$post$count)
+    colorNumeric("YlOrRd", domain = log1p(all_counts))
+  })
+
+  # Render pre-fire map
+  output$sync_maps_ui <- renderUI({
+    req(species_grid_by_period())
+    print("Creating and syncing maps")
+    data <- species_grid_by_period()
+
+    # Create shared color palette
+    all_counts <- c(data$pre$count, data$post$count)
+    pal <- colorNumeric("YlOrRd", domain = log1p(all_counts))
+
+    # Create pre-fire map
+    pre_map <- leaflet() %>%
       addTiles() %>%
-      addPolygons(
-        data = fire_sf,
-        color = "red",
-        weight = 2,
-        fill = FALSE,
-        group = "Fire",
-        popup = ~FIRE_NAME
+      addControl(
+        html = "<h4 style='text-align:center; margin:0; background-color:white; padding:5px; border-radius:3px; box-shadow:0 0 5px rgba(0,0,0,0.2);'>Pre-Fire</h4>",
+        position = "topright"
       ) %>%
       addPolygons(
-        data = grid_sf,
+        data = data$fire,
+        color = "red",
+        weight = 2,
+        fill = FALSE
+      ) %>%
+      addPolygons(
+        data = data$pre,
         fillColor = ~ pal(log1p(count)),
         fillOpacity = 0.7,
         color = "black",
         weight = 1,
-        group = "Grid",
-        popup = popup_text
+        label = if (input$count_type == "Total Observations") {
+          ~ paste("Pre-fire Obs. Count:", count)
+        } else {
+          ~ paste("Pre-fire Species Count:", count)
+        },
+        highlightOptions = highlightOptions(
+          weight = 2,
+          color = "#666",
+          fillOpacity = 0.7,
+          bringToFront = TRUE
+        )
+      ) # %>%
+    # addLegend(
+    #   position = "bottomright",
+    #   pal = pal,
+    #   values = log1p(all_counts),
+    #   labFormat = labelFormat(transform = function(x) round(expm1(x), 0)),
+    #   title = if (input$count_type == "Total Observations") {
+    #     "Observation Count"
+    #   } else {
+    #     "Species Count"
+    #   }
+    # )
+
+    # Create post-fire map
+    post_map <- leaflet() %>%
+      addTiles() %>%
+      addControl(
+        html = "<h4 style='text-align:center; margin:0; background-color:white; padding:5px; border-radius:3px; box-shadow:0 0 5px rgba(0,0,0,0.2);'>Post-Fire</h4>",
+        position = "topright"
+      ) %>%
+      addPolygons(
+        data = data$fire,
+        color = "red",
+        weight = 2,
+        fill = FALSE
+      ) %>%
+      addPolygons(
+        data = data$post,
+        fillColor = ~ pal(log1p(count)),
+        fillOpacity = 0.7,
+        color = "black",
+        weight = 1,
+        label = if (input$count_type == "Total Observations") {
+          ~ paste("Post-fire Obs. Count:", count)
+        } else {
+          ~ paste("Post-fire Species Count:", count)
+        },
+        highlightOptions = highlightOptions(
+          weight = 2,
+          color = "#666",
+          fillOpacity = 0.7,
+          bringToFront = TRUE
+        )
       ) %>%
       addLegend(
         position = "bottomright",
         pal = pal,
-        values = log1p(grid_sf$count),
+        values = log1p(all_counts),
         labFormat = labelFormat(transform = function(x) round(expm1(x), 0)),
-        title = legend_title
+        title = if (input$count_type == "Total Observations") {
+          "Observation Count"
+        } else {
+          "Species Count"
+        }
       )
-  }) %>% bindCache(input$fire_select, input$taxa_filter, input$count_type)
+
+    # Create a synchronized map view
+    sync_maps <- leafsync::sync(list(pre_map, post_map))
+
+    # Return the HTML widget
+    sync_maps
+  }) %>% bindCache(input$fire_select, input$taxa_filter, input$count_type, input$time_range)
 
   # --- Species Richness Data and Plot ---------------------------------------
   richness_data <- reactive({
