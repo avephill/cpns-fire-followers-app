@@ -74,7 +74,14 @@ ui <- fluidPage(
     id = "tabs",
     tabPanel(
       "Select Fire",
-      leafletOutput("fireMap", height = 600)
+      fluidRow(
+        column(
+          12,
+          h4("Please select a fire on the map to begin exploring data", style = "text-align: center; margin-top: 20px;"),
+          p("Click on any fire marker to view biodiversity insights for that fire.", style = "text-align: center;"),
+          leafletOutput("fireMap", height = 450)
+        )
+      )
     ),
     tabPanel(
       "Biodiversity Insights",
@@ -1076,7 +1083,7 @@ server <- function(input, output, session) {
     }
 
     # Determine what type of counts we're showing
-    count_type_text <- if (input$count_type == "Total Species") "species" else "observations"
+    count_type_text <- if (input$count_type == "Total Species") "total species" else "total observations"
 
     # Create HTML output with the total values
     HTML(paste0(
