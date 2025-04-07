@@ -19,8 +19,9 @@ sf_use_s2(FALSE)
 
 # --- Setup DuckDB Connection -----------------------------------------------
 print("Establishing DuckDB connection...")
-con <- dbConnect(duckdb::duckdb(), "data/shiny.db")
-dbExecute(con, "LOAD 'spatial';")
+con <- dbConnect(duckdb::duckdb(), "data/shiny.db", read_only = TRUE)
+# con |> dbListTables()
+# dbExecute(con, "INSTALL 'spatial'; LOAD 'spatial';")
 print("DuckDB connection established and spatial extension loaded.")
 
 # --- Get Fire List Using dbplyr ----------------------------------------------
@@ -55,6 +56,57 @@ ui <- fluidPage(
       #map_pre, #map_post {
         flex: 1;
       }
+      /* Style for help tooltips */
+      .help-tooltip {
+        display: inline-block;
+        width: 16px;
+        height: 16px;
+        line-height: 16px;
+        text-align: center;
+        border-radius: 50%;
+        background-color: #e0e0e0;
+        color: #666;
+        font-size: 12px;
+        margin-left: 5px;
+        cursor: help;
+        position: relative;
+        top: -2px;
+      }
+      .help-tooltip:hover {
+        background-color: #d0d0d0;
+      }
+      .tooltip-text {
+        visibility: hidden;
+        width: 200px;
+        background-color: #555;
+        color: #fff;
+        text-align: center;
+        border-radius: 6px;
+        padding: 8px;
+        position: absolute;
+        z-index: 1;
+        bottom: 125%;
+        left: 50%;
+        margin-left: -100px;
+        opacity: 0;
+        transition: opacity 0.3s;
+        font-size: 14px;
+        font-style: normal;
+      }
+      .tooltip-text::after {
+        content: '';
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        margin-left: -5px;
+        border-width: 5px;
+        border-style: solid;
+        border-color: #555 transparent transparent transparent;
+      }
+      .help-tooltip:hover .tooltip-text {
+        visibility: visible;
+        opacity: 1;
+      }
     "))
   ),
   titlePanel("CNPS Fire Followers Explorer"),
@@ -76,7 +128,8 @@ ui <- fluidPage(
       "Select Fire",
       fluidRow(
         column(
-          12,
+          8,
+          offset = 2,
           h4("Please select a fire on the map to begin exploring data", style = "text-align: center; margin-top: 20px;"),
           p("Click on any fire marker to view biodiversity insights for that fire.", style = "text-align: center;"),
           leafletOutput("fireMap", height = 450)
@@ -94,11 +147,25 @@ ui <- fluidPage(
           wellPanel(
             h4("Fire Filters"),
             # New searchable, multi-select input for fires.
-            selectizeInput("fire_select", "Select Fire(s)",
-              choices = fire_names,
+            selectizeInput("fire_select",
+              div(
+                "Select Fire(s)",
+                tags$span(
+                  class = "help-tooltip",
+                  "?",
+                  tags$span(
+                    class = "tooltip-text",
+                    "You can select multiple fires by clicking or using the search box"
+                  )
+                )
+              ),
+              choices = c("All" = "all", setNames(fire_names, fire_names)),
               selected = NULL,
               multiple = TRUE,
               options = list(placeholder = "Search for fires")
+            ),
+            p("Tip: You can select multiple fires by clicking or using the search box",
+              style = "font-style: italic; color: #666; font-size: 0.9em; margin-top: -10px;"
             ),
             # Render time slider dynamically with fire alarm date in the label.
             uiOutput("time_range_ui")
@@ -108,7 +175,18 @@ ui <- fluidPage(
           wellPanel(
             h4("Observation Filters"),
             # Single selectizeInput for taxonomic filtering across all levels.
-            selectizeInput("taxa_filter", "Taxa Filter",
+            selectizeInput("taxa_filter",
+              div(
+                "Taxa Filter",
+                tags$span(
+                  class = "help-tooltip",
+                  "?",
+                  tags$span(
+                    class = "tooltip-text",
+                    "You can search and filter by class, family, genus, or species"
+                  )
+                )
+              ),
               choices = NULL,
               options = list(
                 placeholder = "Search by class, family, genus, or species",
@@ -164,11 +242,41 @@ ui <- fluidPage(
             ),
             tabPanel(
               "Fire Severity Barplot",
-              plotOutput("richnessPlot")
+              fluidRow(
+                column(
+                  8,
+                  plotOutput("richnessPlot")
+                ),
+                column(
+                  4,
+                  wellPanel(
+                    h4("MTBS Fire Severity Classes"),
+                    tags$ul(
+                      tags$li(tags$b("1 - Unburned to Low: "), "Little or no change from pre-fire conditions"),
+                      tags$li(tags$b("2 - Low: "), "Surface fires with minimal overstory effects"),
+                      tags$li(tags$b("3 - Moderate: "), "Mixture of surface and canopy effects"),
+                      tags$li(tags$b("4 - High: "), "Complete or near complete consumption of vegetation"),
+                      tags$li(tags$b("5 & 6: "), "Non-processing mask and fill values"),
+                      tags$li(tags$b("No Data: "), "Areas where severity could not be determined")
+                    ),
+                    p(
+                      "Data source: ",
+                      tags$a(
+                        href = "https://www.mtbs.gov", "Monitoring Trends in Burn Severity (MTBS)",
+                        target = "_blank"
+                      )
+                    )
+                  )
+                )
+              )
             ),
             tabPanel(
               "Top 10 Species",
               plotOutput("top10Plot", height = "600px")
+            ),
+            tabPanel(
+              "Fire Influence",
+              plotOutput("fireInfluencePlot", height = "600px")
             )
           )
         )
@@ -291,27 +399,55 @@ server <- function(input, output, session) {
   # Update the taxa_filter selectizeInput with combined choices.
   observe({
     req(input$fire_select)
-    selected_fire_name <- input$fire_select[1]
-    classes <- tbl(con, "gbif_frap") %>%
-      filter(FIRE_NAME == selected_fire_name) %>%
-      distinct(taxon_class_name) %>%
-      collect() %>%
-      pull(taxon_class_name)
-    families <- tbl(con, "gbif_frap") %>%
-      filter(FIRE_NAME == selected_fire_name) %>%
-      distinct(taxon_family_name) %>%
-      collect() %>%
-      pull(taxon_family_name)
-    genera <- tbl(con, "gbif_frap") %>%
-      filter(FIRE_NAME == selected_fire_name) %>%
-      distinct(taxon_genus_name) %>%
-      collect() %>%
-      pull(taxon_genus_name)
-    species <- tbl(con, "gbif_frap") %>%
-      filter(FIRE_NAME == selected_fire_name) %>%
-      distinct(taxon_species_name) %>%
-      collect() %>%
-      pull(taxon_species_name)
+
+    # Get taxon names based on whether "all" is selected
+    if ("all" %in% input$fire_select) {
+      # For "all" fires, get all unique taxon names
+      classes <- tbl(con, "gbif_frap") %>%
+        distinct(taxon_class_name) %>%
+        collect() %>%
+        pull(taxon_class_name)
+      families <- tbl(con, "gbif_frap") %>%
+        distinct(taxon_family_name) %>%
+        collect() %>%
+        pull(taxon_family_name)
+      genera <- tbl(con, "gbif_frap") %>%
+        distinct(taxon_genus_name) %>%
+        collect() %>%
+        pull(taxon_genus_name)
+      species <- tbl(con, "gbif_frap") %>%
+        distinct(taxon_species_name) %>%
+        collect() %>%
+        pull(taxon_species_name)
+    } else {
+      # For specific fires, get taxon names from selected fires
+      classes <- tbl(con, "gbif_frap") %>%
+        filter(FIRE_NAME %in% input$fire_select) %>%
+        distinct(taxon_class_name) %>%
+        collect() %>%
+        pull(taxon_class_name)
+      families <- tbl(con, "gbif_frap") %>%
+        filter(FIRE_NAME %in% input$fire_select) %>%
+        distinct(taxon_family_name) %>%
+        collect() %>%
+        pull(taxon_family_name)
+      genera <- tbl(con, "gbif_frap") %>%
+        filter(FIRE_NAME %in% input$fire_select) %>%
+        distinct(taxon_genus_name) %>%
+        collect() %>%
+        pull(taxon_genus_name)
+      species <- tbl(con, "gbif_frap") %>%
+        filter(FIRE_NAME %in% input$fire_select) %>%
+        distinct(taxon_species_name) %>%
+        collect() %>%
+        pull(taxon_species_name)
+    }
+
+    # Remove NA values
+    classes <- classes[!is.na(classes)]
+    families <- families[!is.na(families)]
+    genera <- genera[!is.na(genera)]
+    species <- species[!is.na(species)]
 
     choices <- c(
       setNames("all", "All taxa"),
@@ -379,12 +515,23 @@ server <- function(input, output, session) {
   selected_fire <- reactive({
     req(input$fire_select)
     print(paste("selected_fire: Triggered for fires =", paste(input$fire_select, collapse = ", ")))
-    fire_info <- con |>
-      tbl("frap") %>%
-      filter(FIRE_NAME %in% input$fire_select) %>%
-      group_by(FIRE_NAME) %>%
-      slice_max(GIS_ACRES, with_ties = FALSE) %>%
-      collect()
+
+    # If "all" is selected, get all fires
+    if ("all" %in% input$fire_select) {
+      fire_info <- con |>
+        tbl("frap") %>%
+        group_by(FIRE_NAME) %>%
+        slice_max(GIS_ACRES, with_ties = FALSE) %>%
+        collect()
+    } else {
+      fire_info <- con |>
+        tbl("frap") %>%
+        filter(FIRE_NAME %in% input$fire_select) %>%
+        group_by(FIRE_NAME) %>%
+        slice_max(GIS_ACRES, with_ties = FALSE) %>%
+        collect()
+    }
+
     print("selected_fire: Fire info collected from DuckDB.")
 
     fire_sf <- fire_info %>%
@@ -419,13 +566,17 @@ server <- function(input, output, session) {
 
     spp_query <- tbl(con, "gbif_frap") %>%
       filter(
-        FIRE_NAME %in% input$fire_select,
         !is.na(latitude),
         !is.na(longitude),
         # Add time range filter
         observed_on >= start_date,
         observed_on <= end_date
       )
+
+    # Add fire filter if not "all"
+    if (!("all" %in% input$fire_select)) {
+      spp_query <- spp_query %>% filter(FIRE_NAME %in% input$fire_select)
+    }
 
     if (!is.null(input$taxa_filter) && input$taxa_filter != "" && input$taxa_filter != "all") {
       split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
@@ -468,13 +619,18 @@ server <- function(input, output, session) {
 
     spp_query <- tbl(con, "gbif_frap") %>%
       filter(
-        FIRE_NAME %in% input$fire_select,
         !is.na(latitude),
         !is.na(longitude),
         # Add time range filter
         observed_on >= start_date,
         observed_on <= end_date
       )
+
+    # Add fire filter if not "all"
+    if (!("all" %in% input$fire_select)) {
+      spp_query <- spp_query %>% filter(FIRE_NAME %in% input$fire_select)
+    }
+
     spp_df <- spp_query %>%
       select(
         id, latitude, longitude, observed_on, scientific_name,
@@ -688,13 +844,29 @@ server <- function(input, output, session) {
   richness_data <- reactive({
     req(input$count_type, input$fire_select)
     print("richness_data: Calculating species richness data.")
-    # Use the alarm date from the first selected fire.
-    fire_info <- con %>%
-      tbl("frap") %>%
-      filter(FIRE_NAME == !!input$fire_select[1]) %>%
-      collect()
-    fire_date <- as.Date(fire_info$ALARM_DATE[1])
-    print(paste("richness_data: Fire alarm date =", fire_date))
+
+    # Get fire date - use average date for multiple fires or "all"
+    if ("all" %in% input$fire_select) {
+      # For "all" fires, get average date across all fires
+      fire_info <- con %>%
+        tbl("frap") %>%
+        group_by(FIRE_NAME) %>%
+        slice_max(GIS_ACRES, with_ties = FALSE) %>%
+        collect()
+    } else {
+      # For specific fires, get those fires' info
+      fire_info <- con %>%
+        tbl("frap") %>%
+        filter(FIRE_NAME %in% input$fire_select) %>%
+        group_by(FIRE_NAME) %>%
+        slice_max(GIS_ACRES, with_ties = FALSE) %>%
+        collect()
+    }
+
+    # Calculate average fire date
+    fire_date <- mean(as.Date(fire_info$ALARM_DATE), na.rm = TRUE)
+    print(paste("richness_data: Average fire alarm date =", fire_date))
+
     start_date <- as.Date(input$time_range[1])
     end_date <- as.Date(input$time_range[2])
     print(paste("richness_data: Selected date range =", start_date, "to", end_date))
@@ -723,17 +895,24 @@ server <- function(input, output, session) {
     pre_fire_by_severity <- if (start_date < fire_date) {
       qry <- tbl(con, "gbif_frap") %>%
         filter(
-          FIRE_NAME %in% selected_fire_names,
           observed_on >= start_date,
           observed_on < fire_date
         )
+
+      # Add fire filter if not "all"
+      if (!("all" %in% selected_fire_names)) {
+        qry <- qry %>% filter(FIRE_NAME %in% selected_fire_names)
+      }
+
       qry <- apply_taxon_filter(qry)
 
       # Group by severity and calculate counts
       counts <- qry %>%
         group_by(mtbs_fire_severity) %>%
         summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
-        collect()
+        collect() %>%
+        # Ensure mtbs_fire_severity is character type
+        mutate(mtbs_fire_severity = as.character(mtbs_fire_severity))
 
       # Get total across all severities for pre-fire
       total_pre <- qry %>%
@@ -743,7 +922,7 @@ server <- function(input, output, session) {
 
       # Add total row and handle NA values
       counts <- counts %>%
-        mutate(mtbs_fire_severity = ifelse(is.na(mtbs_fire_severity), "No Data", as.character(mtbs_fire_severity)))
+        mutate(mtbs_fire_severity = ifelse(is.na(mtbs_fire_severity), "No Data", mtbs_fire_severity))
 
       total_row <- data.frame(mtbs_fire_severity = "All", val = total_pre)
       bind_rows(total_row, counts) %>%
@@ -756,17 +935,24 @@ server <- function(input, output, session) {
     post_fire_by_severity <- if (end_date >= fire_date) {
       qry <- tbl(con, "gbif_frap") %>%
         filter(
-          FIRE_NAME %in% selected_fire_names,
           observed_on >= fire_date,
           observed_on <= end_date
         )
+
+      # Add fire filter if not "all"
+      if (!("all" %in% selected_fire_names)) {
+        qry <- qry %>% filter(FIRE_NAME %in% selected_fire_names)
+      }
+
       qry <- apply_taxon_filter(qry)
 
       # Group by severity and calculate counts
       counts <- qry %>%
         group_by(mtbs_fire_severity) %>%
         summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
-        collect()
+        collect() %>%
+        # Ensure mtbs_fire_severity is character type
+        mutate(mtbs_fire_severity = as.character(mtbs_fire_severity))
 
       # Get total across all severities for post-fire
       total_post <- qry %>%
@@ -776,7 +962,7 @@ server <- function(input, output, session) {
 
       # Add total row and handle NA values
       counts <- counts %>%
-        mutate(mtbs_fire_severity = ifelse(is.na(mtbs_fire_severity), "No Data", as.character(mtbs_fire_severity)))
+        mutate(mtbs_fire_severity = ifelse(is.na(mtbs_fire_severity), "No Data", mtbs_fire_severity))
 
       total_row <- data.frame(mtbs_fire_severity = "All", val = total_post)
       bind_rows(total_row, counts) %>%
@@ -793,12 +979,18 @@ server <- function(input, output, session) {
     if (input$relative_prop) {
       # Get unfiltered totals for the same period
       total_pre_all <- if (start_date < fire_date) {
-        tbl(con, "gbif_frap") %>%
+        qry <- tbl(con, "gbif_frap") %>%
           filter(
-            FIRE_NAME %in% selected_fire_names,
             observed_on >= start_date,
             observed_on < fire_date
-          ) %>%
+          )
+
+        # Add fire filter if not "all"
+        if (!("all" %in% selected_fire_names)) {
+          qry <- qry %>% filter(FIRE_NAME %in% selected_fire_names)
+        }
+
+        qry %>%
           summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
           collect() %>%
           pull(val)
@@ -807,12 +999,18 @@ server <- function(input, output, session) {
       }
 
       total_post_all <- if (end_date >= fire_date) {
-        tbl(con, "gbif_frap") %>%
+        qry <- tbl(con, "gbif_frap") %>%
           filter(
-            FIRE_NAME %in% selected_fire_names,
             observed_on >= fire_date,
             observed_on <= end_date
-          ) %>%
+          )
+
+        # Add fire filter if not "all"
+        if (!("all" %in% selected_fire_names)) {
+          qry <- qry %>% filter(FIRE_NAME %in% selected_fire_names)
+        }
+
+        qry %>%
           summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
           collect() %>%
           pull(val)
@@ -888,19 +1086,37 @@ server <- function(input, output, session) {
     req(input$count_type, input$fire_select)
     print("top10_data: Calculating top 10 species data.")
 
-    # Get fire date from first selected fire
-    fire_info <- con %>%
-      tbl("frap") %>%
-      filter(FIRE_NAME == !!input$fire_select[1]) %>%
-      collect()
-    fire_date <- as.Date(fire_info$ALARM_DATE[1])
+    # Get fire date - use average date for multiple fires or "all"
+    if ("all" %in% input$fire_select) {
+      # For "all" fires, get average date across all fires
+      fire_info <- con %>%
+        tbl("frap") %>%
+        group_by(FIRE_NAME) %>%
+        slice_max(GIS_ACRES, with_ties = FALSE) %>%
+        collect()
+    } else {
+      # For specific fires, get those fires' info
+      fire_info <- con %>%
+        tbl("frap") %>%
+        filter(FIRE_NAME %in% input$fire_select) %>%
+        group_by(FIRE_NAME) %>%
+        slice_max(GIS_ACRES, with_ties = FALSE) %>%
+        collect()
+    }
+
+    # Calculate average fire date
+    fire_date <- mean(as.Date(fire_info$ALARM_DATE), na.rm = TRUE)
     start_date <- as.Date(input$time_range[1])
     end_date <- as.Date(input$time_range[2])
     selected_fire_names <- input$fire_select
 
     # Base query with fire and date filters
-    base_query <- tbl(con, "gbif_frap") %>%
-      filter(FIRE_NAME %in% selected_fire_names)
+    base_query <- tbl(con, "gbif_frap")
+
+    # Add fire filter if not "all"
+    if (!("all" %in% selected_fire_names)) {
+      base_query <- base_query %>% filter(FIRE_NAME %in% selected_fire_names)
+    }
 
     # Apply taxa filter if specified
     if (!is.null(input$taxa_filter) && input$taxa_filter != "" && input$taxa_filter != "all") {
@@ -954,6 +1170,16 @@ server <- function(input, output, session) {
 
     # Combine and get top 10 species across both periods
     combined <- bind_rows(pre_fire, post_fire)
+
+    # Check if we have any data
+    if (nrow(combined) == 0) {
+      return(data.frame(
+        scientific_name = character(0),
+        count = numeric(0),
+        period = character(0)
+      ))
+    }
+
     top_species <- combined %>%
       group_by(scientific_name) %>%
       summarize(total_count = sum(count)) %>%
@@ -1091,6 +1317,186 @@ server <- function(input, output, session) {
       "Pre-fire: ", total_pre_all, " ", count_type_text, "<br>",
       "Post-fire: ", total_post_all, " ", count_type_text
     ))
+  })
+
+  # Add new reactive for fire influence data
+  fire_influence_data <- reactive({
+    req(input$count_type, input$fire_select)
+    print("fire_influence_data: Calculating species fire influence data.")
+
+    # Get fire date - use average date for multiple fires or "all"
+    if ("all" %in% input$fire_select) {
+      # For "all" fires, get average date across all fires
+      fire_info <- con %>%
+        tbl("frap") %>%
+        group_by(FIRE_NAME) %>%
+        slice_max(GIS_ACRES, with_ties = FALSE) %>%
+        collect()
+    } else {
+      # For specific fires, get those fires' info
+      fire_info <- con %>%
+        tbl("frap") %>%
+        filter(FIRE_NAME %in% input$fire_select) %>%
+        group_by(FIRE_NAME) %>%
+        slice_max(GIS_ACRES, with_ties = FALSE) %>%
+        collect()
+    }
+
+    # Calculate average fire date
+    fire_date <- mean(as.Date(fire_info$ALARM_DATE), na.rm = TRUE)
+    start_date <- as.Date(input$time_range[1])
+    end_date <- as.Date(input$time_range[2])
+    selected_fire_names <- input$fire_select
+
+    # Base query with fire and date filters
+    base_query <- tbl(con, "gbif_frap")
+
+    # Add fire filter if not "all"
+    if (!("all" %in% selected_fire_names)) {
+      base_query <- base_query %>% filter(FIRE_NAME %in% selected_fire_names)
+    }
+
+    # Apply taxa filter if specified
+    if (!is.null(input$taxa_filter) && input$taxa_filter != "" && input$taxa_filter != "all") {
+      split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
+      level <- split_val[1]
+      value <- split_val[2]
+      base_query <- switch(level,
+        "class" = base_query %>% filter(taxon_class_name == value),
+        "family" = base_query %>% filter(taxon_family_name == value),
+        "genus" = base_query %>% filter(taxon_genus_name == value),
+        "species" = base_query %>% filter(taxon_species_name == value),
+        base_query
+      )
+    }
+
+    # Get pre-fire and post-fire counts
+    pre_fire <- base_query %>%
+      filter(
+        observed_on >= start_date,
+        observed_on < fire_date
+      ) %>%
+      group_by(scientific_name) %>%
+      summarize(
+        pre_count = if (input$count_type == "Total Species") n_distinct(scientific_name) else n(),
+        .groups = "drop"
+      ) %>%
+      collect()
+
+    post_fire <- base_query %>%
+      filter(
+        observed_on >= fire_date,
+        observed_on <= end_date
+      ) %>%
+      group_by(scientific_name) %>%
+      summarize(
+        post_count = if (input$count_type == "Total Species") n_distinct(scientific_name) else n(),
+        .groups = "drop"
+      ) %>%
+      collect()
+
+    # Combine and calculate ratios
+    combined <- full_join(pre_fire, post_fire, by = "scientific_name") %>%
+      mutate(
+        pre_count = replace_na(pre_count, 0),
+        post_count = replace_na(post_count, 0),
+        # Add small constant to avoid division by zero
+        ratio = (post_count + 0.1) / (pre_count + 0.1),
+        abs_diff = post_count - pre_count
+      ) %>%
+      # Filter out species with very few observations
+      filter(pre_count + post_count >= 5) %>%
+      # Get top 10 by absolute difference
+      arrange(desc(abs(abs_diff))) %>%
+      slice_head(n = 10)
+
+    # Check if we have any data
+    if (nrow(combined) == 0) {
+      return(data.frame(
+        scientific_name = character(0),
+        pre_count = numeric(0),
+        post_count = numeric(0),
+        ratio = numeric(0),
+        abs_diff = numeric(0),
+        label = character(0),
+        period = character(0),
+        count = numeric(0)
+      ))
+    }
+
+    combined <- combined %>%
+      mutate(
+        # Create label combining name and ratio
+        label = sprintf("%s\n(%.1fx)", scientific_name, ratio),
+        # Factor for plotting order
+        label = factor(label, levels = label[order(abs_diff)])
+      ) %>%
+      # Reshape for plotting
+      pivot_longer(
+        cols = c(pre_count, post_count),
+        names_to = "period",
+        values_to = "count"
+      ) %>%
+      mutate(
+        period = case_when(
+          period == "pre_count" ~ "Pre-fire",
+          period == "post_count" ~ "Post-fire"
+        )
+      )
+
+    # If relative proportion is requested, calculate percentages
+    if (input$relative_prop) {
+      combined <- combined %>%
+        group_by(period) %>%
+        mutate(
+          total = sum(count),
+          count = if (total > 0) count / total else 0
+        ) %>%
+        ungroup()
+    }
+
+    combined
+  })
+
+  # Add new plot output (add before the server's closing brace)
+  output$fireInfluencePlot <- renderPlot({
+    req(fire_influence_data())
+    print("output$fireInfluencePlot: Rendering fire influence plot.")
+
+    period_colors <- c("Pre-fire" = "#68C6C0", "Post-fire" = "#dd5858")
+
+    p <- ggplot(
+      fire_influence_data(),
+      aes(
+        x = label,
+        y = count,
+        fill = factor(period, levels = c("Pre-fire", "Post-fire"))
+      )
+    ) +
+      geom_bar(stat = "identity", position = "dodge") +
+      scale_fill_manual(values = period_colors) +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        axis.text.y = element_text(size = 12),
+        axis.title = element_text(size = 14),
+        plot.title = element_text(size = 16, face = "bold"),
+        legend.title = element_blank(),
+        legend.position = "top"
+      ) +
+      labs(
+        title = "Species Most Influenced by Fire",
+        subtitle = "Top 10 species with greatest pre-fire to post-fire change",
+        x = "Species (with post-fire/pre-fire ratio)",
+        y = if (input$relative_prop) "Relative Proportion" else "Count"
+      )
+
+    # If the names are too long, try to wrap them
+    if (any(nchar(levels(fire_influence_data()$label)) > 30)) {
+      p <- p + scale_x_discrete(labels = function(x) str_wrap(x, width = 30))
+    }
+
+    p
   })
 
   # Close the DuckDB connection when the session ends.
