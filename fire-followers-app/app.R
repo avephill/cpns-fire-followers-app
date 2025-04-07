@@ -159,7 +159,7 @@ ui <- fluidPage(
                   )
                 )
               ),
-              choices = c("All" = "all", setNames(fire_names, fire_names)),
+              choices = c("All Fires" = "all", setNames(fire_names, fire_names)),
               selected = NULL,
               multiple = TRUE,
               options = list(placeholder = "Search for fires")
@@ -651,25 +651,38 @@ server <- function(input, output, session) {
     spp_sf <- species_points()
     req(fire_sf, spp_sf)
 
-    # Get fire date
-    fire_info <- con %>%
-      tbl("frap") %>%
-      filter(FIRE_NAME == !!input$fire_select[1]) %>%
-      collect()
-    fire_date <- as.Date(fire_info$ALARM_DATE[1])
+    # Get fire date - use average date for multiple fires or "all"
+    if ("all" %in% input$fire_select) {
+      # For "all" fires, get average date across all fires
+      fire_info <- con %>%
+        tbl("frap") %>%
+        group_by(FIRE_NAME) %>%
+        slice_max(GIS_ACRES, with_ties = FALSE) %>%
+        collect()
+      fire_date <- mean(as.Date(fire_info$ALARM_DATE), na.rm = TRUE)
+    } else {
+      # For specific fires, get those fires' info
+      fire_info <- con %>%
+        tbl("frap") %>%
+        filter(FIRE_NAME == !!input$fire_select[1]) %>%
+        collect()
+      fire_date <- as.Date(fire_info$ALARM_DATE[1])
+    }
 
     # Split species points into pre and post fire (filtered)
     spp_pre <- spp_sf %>% filter(as.Date(observed_on) < fire_date)
     spp_post <- spp_sf %>% filter(as.Date(observed_on) >= fire_date)
 
     # Create grids for both periods
+    # For "all" fires, create a grid that covers all fires
+
     fire_bbox <- st_bbox(fire_sf)
     cell_size <- max(fire_bbox$xmax - fire_bbox$xmin, fire_bbox$ymax - fire_bbox$ymin) / 20
-
     grid <- st_make_grid(fire_sf, cellsize = cell_size, square = TRUE)
     grid_sf <- st_sf(geometry = grid) %>%
       st_make_valid() %>%
       st_intersection(fire_sf %>% select(geometry))
+
 
     # Handle any complex geometries in the grid
     if (any(st_geometry_type(grid_sf) == "GEOMETRYCOLLECTION")) {
