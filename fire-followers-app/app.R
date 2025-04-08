@@ -164,9 +164,6 @@ ui <- fluidPage(
               multiple = TRUE,
               options = list(placeholder = "Search for fires")
             ),
-            p("Tip: You can select multiple fires by clicking or using the search box",
-              style = "font-style: italic; color: #666; font-size: 0.9em; margin-top: -10px;"
-            ),
             # Render time slider dynamically with fire alarm date in the label.
             uiOutput("time_range_ui")
           ),
@@ -357,7 +354,7 @@ server <- function(input, output, session) {
     # Get all selected fires
     selected_fire_names <- input$fire_select
     fire_info <- con %>%
-      tbl("frap") %>%
+      tbl("gbif_frap") %>%
       filter(FIRE_NAME %in% selected_fire_names) %>%
       # For each fire, get the record with the largest GIS_ACRES
       group_by(FIRE_NAME) %>%
@@ -463,7 +460,7 @@ server <- function(input, output, session) {
     )
   })
 
-  # Reactive: Get all fires (one record per fire, using the largest fire by GIS_ACRES).
+  # --- Reactive: Get all fires (one record per fire, using the largest fire by GIS_ACRES).
   all_fires <- reactive({
     print("all_fires: Retrieving all fire data.")
     fires_info <- tbl(con, "frap") %>%
@@ -476,6 +473,184 @@ server <- function(input, output, session) {
       st_make_valid()
     fires_sf
   })
+
+  # New reactive to get fire date based on selected fires
+  fire_date <- reactive({
+    req(input$fire_select)
+    print(paste("fire_date: Getting fire dates for fires =", paste(input$fire_select, collapse = ", ")))
+
+    # Get fire info based on selection
+    if ("all" %in% input$fire_select) {
+      # For "all" fires, get all fires
+      fire_info <- con |>
+        tbl("frap") %>%
+        group_by(FIRE_NAME) %>%
+        slice_max(GIS_ACRES, with_ties = FALSE) %>%
+        collect()
+    } else {
+      # For specific fires, get those fires' info
+      fire_info <- con |>
+        tbl("frap") %>%
+        filter(FIRE_NAME %in% input$fire_select) %>%
+        group_by(FIRE_NAME) %>%
+        slice_max(GIS_ACRES, with_ties = FALSE) %>%
+        collect()
+    }
+
+    # Calculate average fire date
+    mean(as.Date(fire_info$ALARM_DATE), na.rm = TRUE)
+  }) %>% bindCache(input$fire_select)
+
+  # New reactive value to centralize all the common filtering logic
+  filtered_gbif_data <- reactive({
+    req(input$fire_select, input$time_range)
+    print(paste("filtered_gbif_data: Filtering gbif_frap data for fires =", paste(input$fire_select, collapse = ", ")))
+
+    # Get fire date from the fire_date reactive
+    f_date <- fire_date()
+
+    # Get the time range values
+    start_date <- as.Date(input$time_range[1])
+    end_date <- as.Date(input$time_range[2])
+
+    # Base query with date filter
+    query <- tbl(con, "gbif_frap") %>%
+      filter(
+        observed_on >= start_date,
+        observed_on <= end_date
+      )
+
+    # Add fire filter if not "all"
+    if (!("all" %in% input$fire_select)) {
+      query <- query %>% filter(FIRE_NAME %in% input$fire_select)
+    }
+
+    # Apply taxon filter if specified
+    if (!is.null(input$taxa_filter) && input$taxa_filter != "" && input$taxa_filter != "all") {
+      split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
+      level <- split_val[1]
+      value <- split_val[2]
+
+      query <- switch(level,
+        "class" = query %>% filter(taxon_class_name == value),
+        "family" = query %>% filter(taxon_family_name == value),
+        "genus" = query %>% filter(taxon_genus_name == value),
+        "species" = query %>% filter(taxon_species_name == value),
+        query
+      )
+    }
+
+    # Check if the query would return an empty result
+    count <- query %>%
+      summarize(n = n()) %>%
+      collect() %>%
+      pull(n)
+
+    if (count == 0) {
+      # Show a notification if no data is found
+      showNotification(
+        "No observations found with the current filters. Try adjusting your filters.",
+        type = "warning",
+        duration = 5
+      )
+    }
+
+    # Return both the query, fire date, and time range for downstream use
+    list(
+      query = query,
+      fire_date = f_date,
+      start_date = start_date,
+      end_date = end_date,
+      empty = (count == 0)
+    )
+  }) %>% bindCache(input$fire_select, input$taxa_filter, input$time_range)
+
+  # Also create a reactive for unfiltered data (no taxon filter) for normalization
+  unfiltered_gbif_data <- reactive({
+    req(input$fire_select, input$time_range)
+    print(paste("unfiltered_gbif_data: Filtering gbif_frap data without taxon filter for fires =", paste(input$fire_select, collapse = ", ")))
+
+    # Get fire date from the fire_date reactive
+    f_date <- fire_date()
+
+    # Get the time range values
+    start_date <- as.Date(input$time_range[1])
+    end_date <- as.Date(input$time_range[2])
+
+    # Base query with date filter
+    query <- tbl(con, "gbif_frap") %>%
+      filter(
+        observed_on >= start_date,
+        observed_on <= end_date
+      )
+
+    # Add fire filter if not "all"
+    if (!("all" %in% input$fire_select)) {
+      query <- query %>% filter(FIRE_NAME %in% input$fire_select)
+    }
+
+    # Check if the query would return an empty result
+    count <- query %>%
+      summarize(n = n()) %>%
+      collect() %>%
+      pull(n)
+
+    # Return both the query, fire date, and time range for downstream use
+    list(
+      query = query,
+      fire_date = f_date,
+      start_date = start_date,
+      end_date = end_date,
+      empty = (count == 0)
+    )
+  }) %>% bindCache(input$fire_select, input$time_range)
+
+  # New reactive values for normalization totals
+  total_pre_all_taxa <- reactive({
+    req(unfiltered_gbif_data())
+    print("total_pre_all_taxa: Calculating total pre-fire counts for normalization.")
+
+    # Get unfiltered data
+    unfiltered_data <- unfiltered_gbif_data()
+
+    # Get fire date and start date
+    fire_date <- unfiltered_data$fire_date
+    start_date <- unfiltered_data$start_date
+
+    # Get pre-fire total across all taxa
+    if (start_date < fire_date) {
+      unfiltered_data$query %>%
+        filter(observed_on < fire_date) %>%
+        summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
+        collect() %>%
+        pull(val)
+    } else {
+      0
+    }
+  }) %>% bindCache(input$fire_select, input$time_range, input$count_type)
+
+  total_post_all_taxa <- reactive({
+    req(unfiltered_gbif_data())
+    print("total_post_all_taxa: Calculating total post-fire counts for normalization.")
+
+    # Get unfiltered data
+    unfiltered_data <- unfiltered_gbif_data()
+
+    # Get fire date and end date
+    fire_date <- unfiltered_data$fire_date
+    end_date <- unfiltered_data$end_date
+
+    # Get post-fire total across all taxa
+    if (end_date >= fire_date) {
+      unfiltered_data$query %>%
+        filter(observed_on >= fire_date) %>%
+        summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
+        collect() %>%
+        pull(val)
+    } else {
+      0
+    }
+  }) %>% bindCache(input$fire_select, input$time_range, input$count_type)
 
   # --- First Tab: Fire Centroids Map ---------------------------------------
   output$fireMap <- renderLeaflet({
@@ -514,7 +689,7 @@ server <- function(input, output, session) {
   # Cache the fire data since it's expensive to compute
   selected_fire <- reactive({
     req(input$fire_select)
-    print(paste("selected_fire: Triggered for fires =", paste(input$fire_select, collapse = ", ")))
+    print("selected_fire: Retrieving fire polygons")
 
     # If "all" is selected, get all fires
     if ("all" %in% input$fire_select) {
@@ -531,8 +706,6 @@ server <- function(input, output, session) {
         slice_max(GIS_ACRES, with_ties = FALSE) %>%
         collect()
     }
-
-    print("selected_fire: Fire info collected from DuckDB.")
 
     fire_sf <- fire_info %>%
       mutate(geometry = st_as_sfc(geom_wkt, crs = 4326) %>% st_zm(drop = TRUE)) %>%
@@ -551,53 +724,30 @@ server <- function(input, output, session) {
         ungroup()
     }
 
-    print("selected_fire: Converted fire info to sf object.")
     fire_sf
   }) %>% bindCache(input$fire_select)
 
   # Cache the species points data (filtered by taxa)
   species_points <- reactive({
-    req(input$fire_select, input$taxa_filter, input$time_range)
-    print(paste("species_points: Retrieving species observations for fires =", paste(input$fire_select, collapse = ", ")))
+    req(filtered_gbif_data())
+    print("species_points: Using filtered_gbif_data to get species points")
 
-    # Get the time range values
-    start_date <- as.Date(input$time_range[1])
-    end_date <- as.Date(input$time_range[2])
+    # Get filtered data
+    filtered_data <- filtered_gbif_data()
 
-    spp_query <- tbl(con, "gbif_frap") %>%
-      filter(
-        !is.na(latitude),
-        !is.na(longitude),
-        # Add time range filter
-        observed_on >= start_date,
-        observed_on <= end_date
-      )
-
-    # Add fire filter if not "all"
-    if (!("all" %in% input$fire_select)) {
-      spp_query <- spp_query %>% filter(FIRE_NAME %in% input$fire_select)
+    # If query is empty based on the flag, return NULL early
+    if (filtered_data$empty) {
+      return(NULL)
     }
 
-    if (!is.null(input$taxa_filter) && input$taxa_filter != "" && input$taxa_filter != "all") {
-      split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
-      level <- split_val[1]
-      value <- split_val[2]
-      if (level == "class") {
-        spp_query <- spp_query %>% filter(taxon_class_name == value)
-      } else if (level == "family") {
-        spp_query <- spp_query %>% filter(taxon_family_name == value)
-      } else if (level == "genus") {
-        spp_query <- spp_query %>% filter(taxon_genus_name == value)
-      } else if (level == "species") {
-        spp_query <- spp_query %>% filter(taxon_species_name == value)
-      }
-    }
-    spp_df <- spp_query %>%
+    spp_df <- filtered_data$query %>%
+      filter(!is.na(latitude), !is.na(longitude)) %>%
       select(
         id, latitude, longitude, observed_on, scientific_name,
         taxon_class_name, taxon_family_name, taxon_genus_name, taxon_species_name
       ) %>%
       collect()
+
     print(paste("species_points: Number of species observations retrieved =", nrow(spp_df)))
     if (nrow(spp_df) == 0) {
       print("species_points: No species observations found!")
@@ -610,79 +760,55 @@ server <- function(input, output, session) {
 
   # New reactive for all species points (without taxon filtering)
   all_species_points <- reactive({
-    req(input$fire_select, input$time_range)
-    print(paste("all_species_points: Retrieving all species observations for fires =", paste(input$fire_select, collapse = ", ")))
+    req(unfiltered_gbif_data())
+    print("all_species_points: Using unfiltered_gbif_data to get all species points")
 
-    # Get the time range values
-    start_date <- as.Date(input$time_range[1])
-    end_date <- as.Date(input$time_range[2])
+    # Get unfiltered data
+    unfiltered_data <- unfiltered_gbif_data()
 
-    spp_query <- tbl(con, "gbif_frap") %>%
-      filter(
-        !is.na(latitude),
-        !is.na(longitude),
-        # Add time range filter
-        observed_on >= start_date,
-        observed_on <= end_date
-      )
-
-    # Add fire filter if not "all"
-    if (!("all" %in% input$fire_select)) {
-      spp_query <- spp_query %>% filter(FIRE_NAME %in% input$fire_select)
+    # If query is empty based on the flag, return NULL early
+    if (unfiltered_data$empty) {
+      return(NULL)
     }
 
-    spp_df <- spp_query %>%
+    spp_df <- unfiltered_data$query %>%
+      filter(!is.na(latitude), !is.na(longitude)) %>%
       select(
         id, latitude, longitude, observed_on, scientific_name,
         taxon_class_name, taxon_family_name, taxon_genus_name, taxon_species_name
       ) %>%
       collect()
+
     if (nrow(spp_df) == 0) {
       return(NULL)
     }
     st_as_sf(spp_df, coords = c("longitude", "latitude"), crs = 4326)
   }) %>% bindCache(input$fire_select, input$time_range)
 
-  # Separate the species grid data by period
+  # Update species_grid_by_period to use the new reactive values
   species_grid_by_period <- reactive({
-    req(input$count_type, input$time_range)
+    req(input$count_type, input$time_range, fire_date(), selected_fire())
     print("species_grid_by_period: Triggered.")
-    fire_sf <- selected_fire()
-    spp_sf <- species_points()
-    req(fire_sf, spp_sf)
 
-    # Get fire date - use average date for multiple fires or "all"
-    if ("all" %in% input$fire_select) {
-      # For "all" fires, get average date across all fires
-      fire_info <- con %>%
-        tbl("frap") %>%
-        group_by(FIRE_NAME) %>%
-        slice_max(GIS_ACRES, with_ties = FALSE) %>%
-        collect()
-      fire_date <- mean(as.Date(fire_info$ALARM_DATE), na.rm = TRUE)
-    } else {
-      # For specific fires, get those fires' info
-      fire_info <- con %>%
-        tbl("frap") %>%
-        filter(FIRE_NAME == !!input$fire_select[1]) %>%
-        collect()
-      fire_date <- as.Date(fire_info$ALARM_DATE[1])
-    }
+    # Get required data
+    fire_sf <- selected_fire()
+    f_date <- fire_date()
+
+    # Use species_points() to get the filtered species data
+    req(species_points())
+    spp_sf <- species_points()
 
     # Split species points into pre and post fire (filtered)
-    spp_pre <- spp_sf %>% filter(as.Date(observed_on) < fire_date)
-    spp_post <- spp_sf %>% filter(as.Date(observed_on) >= fire_date)
+    spp_pre <- spp_sf %>% filter(as.Date(observed_on) < f_date)
+    spp_post <- spp_sf %>% filter(as.Date(observed_on) >= f_date)
 
-    # Create grids for both periods
-    # For "all" fires, create a grid that covers all fires
-
+    # Create grid from fire perimeter
     fire_bbox <- st_bbox(fire_sf)
     cell_size <- max(fire_bbox$xmax - fire_bbox$xmin, fire_bbox$ymax - fire_bbox$ymin) / 20
     grid <- st_make_grid(fire_sf, cellsize = cell_size, square = TRUE)
     grid_sf <- st_sf(geometry = grid) %>%
       st_make_valid() %>%
       st_intersection(fire_sf %>% select(geometry))
-
 
     # Handle any complex geometries in the grid
     if (any(st_geometry_type(grid_sf) == "GEOMETRYCOLLECTION")) {
@@ -715,16 +841,13 @@ server <- function(input, output, session) {
     grid_pre$count <- count_points(grid_pre, spp_pre)
     grid_post$count <- count_points(grid_post, spp_post)
 
-    # If relative proportion is requested, recalc counts using all (unfiltered) points.
+    # If relative proportion is requested, use the reactive total values
     if (input$relative_prop) {
-      req(all_species_points())
-      all_pts <- all_species_points()
-      spp_pre_all <- all_pts %>% filter(as.Date(observed_on) < fire_date)
-      spp_post_all <- all_pts %>% filter(as.Date(observed_on) >= fire_date)
-      total_pre <- count_points(grid_pre, spp_pre_all)
-      total_post <- count_points(grid_post, spp_post_all)
-      grid_pre$count <- ifelse(total_pre > 0, grid_pre$count / total_pre, 0)
-      grid_post$count <- ifelse(total_post > 0, grid_post$count / total_post, 0)
+      pre_total <- total_pre_all_taxa()
+      post_total <- total_post_all_taxa()
+
+      grid_pre$count <- ifelse(pre_total > 0, grid_pre$count / pre_total, 0)
+      grid_post$count <- ifelse(post_total > 0, grid_post$count / post_total, 0)
     }
 
     list(pre = grid_pre, post = grid_post, fire = fire_sf)
@@ -741,9 +864,13 @@ server <- function(input, output, session) {
 
   # Render pre-fire and post-fire maps with synced view.
   output$sync_maps_ui <- renderUI({
-    req(species_grid_by_period())
-    print("Creating and syncing maps")
+    # Make sure we have the necessary inputs
+    req(input$fire_select, input$taxa_filter, input$count_type, input$time_range)
+    # Get the grid data directly, which will be cached
     data <- species_grid_by_period()
+    req(data)
+
+    print("Creating and syncing maps")
 
     # Create shared color palette
     all_counts <- c(data$pre$count, data$post$count)
@@ -855,72 +982,25 @@ server <- function(input, output, session) {
 
   # --- Species Richness Data and Plot ---------------------------------------
   richness_data <- reactive({
-    req(input$count_type, input$fire_select)
+    req(input$count_type, filtered_gbif_data(), unfiltered_gbif_data())
     print("richness_data: Calculating species richness data.")
 
-    # Get fire date - use average date for multiple fires or "all"
-    if ("all" %in% input$fire_select) {
-      # For "all" fires, get average date across all fires
-      fire_info <- con %>%
-        tbl("frap") %>%
-        group_by(FIRE_NAME) %>%
-        slice_max(GIS_ACRES, with_ties = FALSE) %>%
-        collect()
-    } else {
-      # For specific fires, get those fires' info
-      fire_info <- con %>%
-        tbl("frap") %>%
-        filter(FIRE_NAME %in% input$fire_select) %>%
-        group_by(FIRE_NAME) %>%
-        slice_max(GIS_ACRES, with_ties = FALSE) %>%
-        collect()
-    }
+    # Get filtered data
+    filtered_data <- filtered_gbif_data()
 
-    # Calculate average fire date
-    fire_date <- mean(as.Date(fire_info$ALARM_DATE), na.rm = TRUE)
+    # Get necessary values
+    fire_date <- filtered_data$fire_date
+    start_date <- filtered_data$start_date
+    end_date <- filtered_data$end_date
+
     print(paste("richness_data: Average fire alarm date =", fire_date))
-
-    start_date <- as.Date(input$time_range[1])
-    end_date <- as.Date(input$time_range[2])
     print(paste("richness_data: Selected date range =", start_date, "to", end_date))
-    selected_fire_names <- input$fire_select
-
-    # Function to conditionally apply the taxon filter
-    apply_taxon_filter <- function(qry) {
-      if (!is.null(input$taxa_filter) && input$taxa_filter != "" && input$taxa_filter != "all") {
-        split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
-        level <- split_val[1]
-        value <- split_val[2]
-        if (level == "class") {
-          qry <- qry %>% filter(taxon_class_name == value)
-        } else if (level == "family") {
-          qry <- qry %>% filter(taxon_family_name == value)
-        } else if (level == "genus") {
-          qry <- qry %>% filter(taxon_genus_name == value)
-        } else if (level == "species") {
-          qry <- qry %>% filter(taxon_species_name == value)
-        }
-      }
-      qry
-    }
 
     # Get pre-fire data grouped by severity
     pre_fire_by_severity <- if (start_date < fire_date) {
-      qry <- tbl(con, "gbif_frap") %>%
-        filter(
-          observed_on >= start_date,
-          observed_on < fire_date
-        )
-
-      # Add fire filter if not "all"
-      if (!("all" %in% selected_fire_names)) {
-        qry <- qry %>% filter(FIRE_NAME %in% selected_fire_names)
-      }
-
-      qry <- apply_taxon_filter(qry)
-
-      # Group by severity and calculate counts
-      counts <- qry %>%
+      # Use the filtered query to get pre-fire data
+      counts <- filtered_data$query %>%
+        filter(observed_on < fire_date) %>%
         group_by(mtbs_fire_severity) %>%
         summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
         collect() %>%
@@ -928,7 +1008,8 @@ server <- function(input, output, session) {
         mutate(mtbs_fire_severity = as.character(mtbs_fire_severity))
 
       # Get total across all severities for pre-fire
-      total_pre <- qry %>%
+      total_pre <- filtered_data$query %>%
+        filter(observed_on < fire_date) %>%
         summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
         collect() %>%
         pull(val)
@@ -946,21 +1027,9 @@ server <- function(input, output, session) {
 
     # Get post-fire data grouped by severity
     post_fire_by_severity <- if (end_date >= fire_date) {
-      qry <- tbl(con, "gbif_frap") %>%
-        filter(
-          observed_on >= fire_date,
-          observed_on <= end_date
-        )
-
-      # Add fire filter if not "all"
-      if (!("all" %in% selected_fire_names)) {
-        qry <- qry %>% filter(FIRE_NAME %in% selected_fire_names)
-      }
-
-      qry <- apply_taxon_filter(qry)
-
-      # Group by severity and calculate counts
-      counts <- qry %>%
+      # Use the filtered query to get post-fire data
+      counts <- filtered_data$query %>%
+        filter(observed_on >= fire_date) %>%
         group_by(mtbs_fire_severity) %>%
         summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
         collect() %>%
@@ -968,7 +1037,8 @@ server <- function(input, output, session) {
         mutate(mtbs_fire_severity = as.character(mtbs_fire_severity))
 
       # Get total across all severities for post-fire
-      total_post <- qry %>%
+      total_post <- filtered_data$query %>%
+        filter(observed_on >= fire_date) %>%
         summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
         collect() %>%
         pull(val)
@@ -988,55 +1058,17 @@ server <- function(input, output, session) {
     combined_data <- bind_rows(pre_fire_by_severity, post_fire_by_severity) %>%
       rename(Count = val, Severity = mtbs_fire_severity)
 
-    # If relative proportion is requested, compute ratios
+    # If relative proportion is requested, use the reactive total values
     if (input$relative_prop) {
-      # Get unfiltered totals for the same period
-      total_pre_all <- if (start_date < fire_date) {
-        qry <- tbl(con, "gbif_frap") %>%
-          filter(
-            observed_on >= start_date,
-            observed_on < fire_date
-          )
-
-        # Add fire filter if not "all"
-        if (!("all" %in% selected_fire_names)) {
-          qry <- qry %>% filter(FIRE_NAME %in% selected_fire_names)
-        }
-
-        qry %>%
-          summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
-          collect() %>%
-          pull(val)
-      } else {
-        0
-      }
-
-      total_post_all <- if (end_date >= fire_date) {
-        qry <- tbl(con, "gbif_frap") %>%
-          filter(
-            observed_on >= fire_date,
-            observed_on <= end_date
-          )
-
-        # Add fire filter if not "all"
-        if (!("all" %in% selected_fire_names)) {
-          qry <- qry %>% filter(FIRE_NAME %in% selected_fire_names)
-        }
-
-        qry %>%
-          summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
-          collect() %>%
-          pull(val)
-      } else {
-        0
-      }
+      pre_total <- total_pre_all_taxa()
+      post_total <- total_post_all_taxa()
 
       # Calculate relative proportions
       combined_data <- combined_data %>%
         mutate(
           Count = case_when(
-            Period == "Pre-fire" & total_pre_all > 0 ~ Count / total_pre_all,
-            Period == "Post-fire" & total_post_all > 0 ~ Count / total_post_all,
+            Period == "Pre-fire" & pre_total > 0 ~ Count / pre_total,
+            Period == "Post-fire" & post_total > 0 ~ Count / post_total,
             TRUE ~ 0
           )
         )
@@ -1058,7 +1090,9 @@ server <- function(input, output, session) {
   output$richnessPlot <- renderPlot({
     req(richness_data())
     print("output$richnessPlot: Rendering species richness plot with severity breakdown.")
-    rd <- richness_data()
+    # 5 and 6 are just mask values I think. remake them into 'No Data'
+    rd <- richness_data() |>
+      mutate(Severity = ifelse(Severity %in% c("5", "6"), "No Data", Severity))
 
     # Define colors for pre-fire and post-fire periods (same as original)
     period_colors <- c("Pre-fire" = "#68C6C0", "Post-fire" = "#dd5858")
@@ -1096,62 +1130,21 @@ server <- function(input, output, session) {
 
   # --- Top 10 Species Data and Plot -----------------------------------------
   top10_data <- reactive({
-    req(input$count_type, input$fire_select)
+    req(input$count_type, filtered_gbif_data())
     print("top10_data: Calculating top 10 species data.")
 
-    # Get fire date - use average date for multiple fires or "all"
-    if ("all" %in% input$fire_select) {
-      # For "all" fires, get average date across all fires
-      fire_info <- con %>%
-        tbl("frap") %>%
-        group_by(FIRE_NAME) %>%
-        slice_max(GIS_ACRES, with_ties = FALSE) %>%
-        collect()
-    } else {
-      # For specific fires, get those fires' info
-      fire_info <- con %>%
-        tbl("frap") %>%
-        filter(FIRE_NAME %in% input$fire_select) %>%
-        group_by(FIRE_NAME) %>%
-        slice_max(GIS_ACRES, with_ties = FALSE) %>%
-        collect()
-    }
+    # Get filtered data
+    filtered_data <- filtered_gbif_data()
 
-    # Calculate average fire date
-    fire_date <- mean(as.Date(fire_info$ALARM_DATE), na.rm = TRUE)
-    start_date <- as.Date(input$time_range[1])
-    end_date <- as.Date(input$time_range[2])
-    selected_fire_names <- input$fire_select
-
-    # Base query with fire and date filters
-    base_query <- tbl(con, "gbif_frap")
-
-    # Add fire filter if not "all"
-    if (!("all" %in% selected_fire_names)) {
-      base_query <- base_query %>% filter(FIRE_NAME %in% selected_fire_names)
-    }
-
-    # Apply taxa filter if specified
-    if (!is.null(input$taxa_filter) && input$taxa_filter != "" && input$taxa_filter != "all") {
-      split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
-      level <- split_val[1]
-      value <- split_val[2]
-      base_query <- switch(level,
-        "class" = base_query %>% filter(taxon_class_name == value),
-        "family" = base_query %>% filter(taxon_family_name == value),
-        "genus" = base_query %>% filter(taxon_genus_name == value),
-        "species" = base_query %>% filter(taxon_species_name == value),
-        base_query
-      )
-    }
+    # Get necessary values
+    fire_date <- filtered_data$fire_date
+    start_date <- filtered_data$start_date
+    end_date <- filtered_data$end_date
 
     # Get pre-fire data
     pre_fire <- if (start_date < fire_date) {
-      base_query %>%
-        filter(
-          observed_on >= start_date,
-          observed_on < fire_date
-        ) %>%
+      filtered_data$query %>%
+        filter(observed_on < fire_date) %>%
         group_by(scientific_name) %>%
         summarize(
           count = if (input$count_type == "Total Species") n_distinct(scientific_name) else n(),
@@ -1165,11 +1158,8 @@ server <- function(input, output, session) {
 
     # Get post-fire data
     post_fire <- if (end_date >= fire_date) {
-      base_query %>%
-        filter(
-          observed_on >= fire_date,
-          observed_on <= end_date
-        ) %>%
+      filtered_data$query %>%
+        filter(observed_on >= fire_date) %>%
         group_by(scientific_name) %>%
         summarize(
           count = if (input$count_type == "Total Species") n_distinct(scientific_name) else n(),
@@ -1181,7 +1171,7 @@ server <- function(input, output, session) {
     }
     post_fire$period <- "Post-fire"
 
-    # Combine and get top 10 species across both periods
+    # Combine data
     combined <- bind_rows(pre_fire, post_fire)
 
     # Check if we have any data
@@ -1193,6 +1183,25 @@ server <- function(input, output, session) {
       ))
     }
 
+    # If relative proportion is requested, use the reactive total values
+    if (input$relative_prop) {
+      pre_total <- total_pre_all_taxa()
+      post_total <- total_post_all_taxa()
+
+      # Apply the proportions
+      combined <- combined %>%
+        mutate(
+          count = case_when(
+            period == "Pre-fire" & pre_total > 0 ~ count / pre_total,
+            period == "Post-fire" & post_total > 0 ~ count / post_total,
+            TRUE ~ 0
+          )
+        )
+    }
+
+    # Now find top 10 species based on the potentially normalized counts
+    # For normalized counts, we use the sum of proportions for ranking
+    # For raw counts, we use the sum of observations
     top_species <- combined %>%
       group_by(scientific_name) %>%
       summarize(total_count = sum(count)) %>%
@@ -1204,23 +1213,6 @@ server <- function(input, output, session) {
     result <- combined %>%
       filter(scientific_name %in% top_species) %>%
       complete(scientific_name = top_species, period = c("Pre-fire", "Post-fire"), fill = list(count = 0))
-
-    # If relative proportion is requested, calculate percentages
-    if (input$relative_prop) {
-      # Fix: Calculate total sums first
-      pre_total <- sum(result$count[result$period == "Pre-fire"])
-      post_total <- sum(result$count[result$period == "Post-fire"])
-
-      # Then apply the proportions
-      result <- result %>%
-        mutate(
-          count = case_when(
-            period == "Pre-fire" & pre_total > 0 ~ count / pre_total,
-            period == "Post-fire" & post_total > 0 ~ count / post_total,
-            TRUE ~ 0
-          )
-        )
-    }
 
     # Reorder factors for plotting
     result %>%
@@ -1278,48 +1270,13 @@ server <- function(input, output, session) {
     }
   })
 
-  # Add new output to display denominator information for proportions
+  # Update the proportion_info to use the reactive values
   output$proportion_info <- renderUI({
-    req(input$fire_select, input$time_range)
+    req(total_pre_all_taxa(), total_post_all_taxa())
 
-    # Use the alarm date from the first selected fire
-    fire_info <- con %>%
-      tbl("frap") %>%
-      filter(FIRE_NAME == !!input$fire_select[1]) %>%
-      collect()
-    fire_date <- as.Date(fire_info$ALARM_DATE[1])
-    start_date <- as.Date(input$time_range[1])
-    end_date <- as.Date(input$time_range[2])
-    selected_fire_names <- input$fire_select
-
-    # Calculate total denominators
-    total_pre_all <- if (start_date < fire_date) {
-      tbl(con, "gbif_frap") %>%
-        filter(
-          FIRE_NAME %in% selected_fire_names,
-          observed_on >= start_date,
-          observed_on < fire_date
-        ) %>%
-        summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
-        collect() %>%
-        pull(val)
-    } else {
-      0
-    }
-
-    total_post_all <- if (end_date >= fire_date) {
-      tbl(con, "gbif_frap") %>%
-        filter(
-          FIRE_NAME %in% selected_fire_names,
-          observed_on >= fire_date,
-          observed_on <= end_date
-        ) %>%
-        summarize(val = if (input$count_type == "Total Species") n_distinct(scientific_name) else n()) %>%
-        collect() %>%
-        pull(val)
-    } else {
-      0
-    }
+    # Get the pre and post totals from the reactive values
+    pre_total <- total_pre_all_taxa()
+    post_total <- total_post_all_taxa()
 
     # Determine what type of counts we're showing
     count_type_text <- if (input$count_type == "Total Species") "total species" else "total observations"
@@ -1327,68 +1284,27 @@ server <- function(input, output, session) {
     # Create HTML output with the total values
     HTML(paste0(
       "Denominator totals:<br>",
-      "Pre-fire: ", total_pre_all, " ", count_type_text, "<br>",
-      "Post-fire: ", total_post_all, " ", count_type_text
+      "Pre-fire: ", pre_total, " ", count_type_text, "<br>",
+      "Post-fire: ", post_total, " ", count_type_text
     ))
   })
 
   # Add new reactive for fire influence data
   fire_influence_data <- reactive({
-    req(input$count_type, input$fire_select)
+    req(input$count_type, filtered_gbif_data())
     print("fire_influence_data: Calculating species fire influence data.")
 
-    # Get fire date - use average date for multiple fires or "all"
-    if ("all" %in% input$fire_select) {
-      # For "all" fires, get average date across all fires
-      fire_info <- con %>%
-        tbl("frap") %>%
-        group_by(FIRE_NAME) %>%
-        slice_max(GIS_ACRES, with_ties = FALSE) %>%
-        collect()
-    } else {
-      # For specific fires, get those fires' info
-      fire_info <- con %>%
-        tbl("frap") %>%
-        filter(FIRE_NAME %in% input$fire_select) %>%
-        group_by(FIRE_NAME) %>%
-        slice_max(GIS_ACRES, with_ties = FALSE) %>%
-        collect()
-    }
+    # Get filtered data
+    filtered_data <- filtered_gbif_data()
 
-    # Calculate average fire date
-    fire_date <- mean(as.Date(fire_info$ALARM_DATE), na.rm = TRUE)
-    start_date <- as.Date(input$time_range[1])
-    end_date <- as.Date(input$time_range[2])
-    selected_fire_names <- input$fire_select
-
-    # Base query with fire and date filters
-    base_query <- tbl(con, "gbif_frap")
-
-    # Add fire filter if not "all"
-    if (!("all" %in% selected_fire_names)) {
-      base_query <- base_query %>% filter(FIRE_NAME %in% selected_fire_names)
-    }
-
-    # Apply taxa filter if specified
-    if (!is.null(input$taxa_filter) && input$taxa_filter != "" && input$taxa_filter != "all") {
-      split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
-      level <- split_val[1]
-      value <- split_val[2]
-      base_query <- switch(level,
-        "class" = base_query %>% filter(taxon_class_name == value),
-        "family" = base_query %>% filter(taxon_family_name == value),
-        "genus" = base_query %>% filter(taxon_genus_name == value),
-        "species" = base_query %>% filter(taxon_species_name == value),
-        base_query
-      )
-    }
+    # Get necessary values
+    fire_date <- filtered_data$fire_date
+    start_date <- filtered_data$start_date
+    end_date <- filtered_data$end_date
 
     # Get pre-fire and post-fire counts
-    pre_fire <- base_query %>%
-      filter(
-        observed_on >= start_date,
-        observed_on < fire_date
-      ) %>%
+    pre_fire <- filtered_data$query %>%
+      filter(observed_on < fire_date) %>%
       group_by(scientific_name) %>%
       summarize(
         pre_count = if (input$count_type == "Total Species") n_distinct(scientific_name) else n(),
@@ -1396,11 +1312,8 @@ server <- function(input, output, session) {
       ) %>%
       collect()
 
-    post_fire <- base_query %>%
-      filter(
-        observed_on >= fire_date,
-        observed_on <= end_date
-      ) %>%
+    post_fire <- filtered_data$query %>%
+      filter(observed_on >= fire_date) %>%
       group_by(scientific_name) %>%
       summarize(
         post_count = if (input$count_type == "Total Species") n_distinct(scientific_name) else n(),
@@ -1412,16 +1325,10 @@ server <- function(input, output, session) {
     combined <- full_join(pre_fire, post_fire, by = "scientific_name") %>%
       mutate(
         pre_count = replace_na(pre_count, 0),
-        post_count = replace_na(post_count, 0),
-        # Add small constant to avoid division by zero
-        ratio = (post_count + 0.1) / (pre_count + 0.1),
-        abs_diff = post_count - pre_count
+        post_count = replace_na(post_count, 0)
       ) %>%
-      # Filter out species with very few observations
-      filter(pre_count + post_count >= 5) %>%
-      # Get top 10 by absolute difference
-      arrange(desc(abs(abs_diff))) %>%
-      slice_head(n = 10)
+      # Filter out species with very few observations (before normalization)
+      filter(pre_count + post_count >= 1)
 
     # Check if we have any data
     if (nrow(combined) == 0) {
@@ -1430,19 +1337,46 @@ server <- function(input, output, session) {
         pre_count = numeric(0),
         post_count = numeric(0),
         ratio = numeric(0),
-        abs_diff = numeric(0),
         label = character(0),
         period = character(0),
         count = numeric(0)
       ))
     }
 
+    # If relative proportion is requested, use the reactive total values
+    if (input$relative_prop) {
+      pre_total <- total_pre_all_taxa()
+      post_total <- total_post_all_taxa()
+
+      # Apply normalization
+      combined <- combined %>%
+        mutate(
+          pre_count_norm = if (pre_total > 0) pre_count / pre_total else 0,
+          post_count_norm = if (post_total > 0) post_count / post_total else 0,
+          # Calculate ratio and absolute difference based on normalized counts
+          ratio = (post_count_norm + 0.001) / (pre_count_norm + 0.001)
+        )
+    } else {
+      # For non-normalized, calculate standard ratio and difference
+      combined <- combined %>%
+        mutate(
+          # Add small constant to avoid division by zero
+          ratio = (post_count + 0.1) / (pre_count + 0.1)
+        )
+    }
+
+    # Filter for top 10 species
+    combined <- combined %>%
+      arrange(desc(ratio)) %>%
+      slice_head(n = 10)
+
+    # Create labels and reshape for plotting
     combined <- combined %>%
       mutate(
         # Create label combining name and ratio
         label = sprintf("%s\n(%.1fx)", scientific_name, ratio),
         # Factor for plotting order
-        label = factor(label, levels = label[order(abs_diff)])
+        label = factor(label, levels = label[order(ratio)])
       ) %>%
       # Reshape for plotting
       pivot_longer(
@@ -1454,18 +1388,25 @@ server <- function(input, output, session) {
         period = case_when(
           period == "pre_count" ~ "Pre-fire",
           period == "post_count" ~ "Post-fire"
-        )
+        ),
+        # Make period a factor to ensure correct ordering
+        period = factor(period, levels = c("Pre-fire", "Post-fire"))
       )
 
-    # If relative proportion is requested, calculate percentages
+    # If relative proportion is requested, use the reactive total values for display normalization
     if (input$relative_prop) {
+      pre_total <- total_pre_all_taxa()
+      post_total <- total_post_all_taxa()
+
+      # Apply the proportions for display
       combined <- combined %>%
-        group_by(period) %>%
         mutate(
-          total = sum(count),
-          count = if (total > 0) count / total else 0
-        ) %>%
-        ungroup()
+          count = case_when(
+            period == "Pre-fire" & pre_total > 0 ~ count / pre_total,
+            period == "Post-fire" & post_total > 0 ~ count / post_total,
+            TRUE ~ 0
+          )
+        )
     }
 
     combined
