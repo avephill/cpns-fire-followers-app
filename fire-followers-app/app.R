@@ -252,9 +252,7 @@ ui <- fluidPage(
                       tags$li(tags$b("1 - Unburned to Low: "), "Little or no change from pre-fire conditions"),
                       tags$li(tags$b("2 - Low: "), "Surface fires with minimal overstory effects"),
                       tags$li(tags$b("3 - Moderate: "), "Mixture of surface and canopy effects"),
-                      tags$li(tags$b("4 - High: "), "Complete or near complete consumption of vegetation"),
-                      tags$li(tags$b("5 & 6: "), "Non-processing mask and fill values"),
-                      tags$li(tags$b("No Data: "), "Areas where severity could not be determined")
+                      tags$li(tags$b("4 - High: "), "Complete or near complete consumption of vegetation")
                     ),
                     p(
                       "Data source: ",
@@ -1091,8 +1089,11 @@ server <- function(input, output, session) {
     req(richness_data())
     print("output$richnessPlot: Rendering species richness plot with severity breakdown.")
     # 5 and 6 are just mask values I think. remake them into 'No Data'
+
     rd <- richness_data() |>
-      mutate(Severity = ifelse(Severity %in% c("5", "6"), "No Data", Severity))
+      mutate(Severity = as.character(Severity)) |>
+      mutate(Severity = ifelse(Severity %in% c("5", "6", "7", "8"), "No Data", Severity)) |>
+      mutate(Severity = factor(Severity, levels = c("All", "1", "2", "3", "4", "No Data")))
 
     # Define colors for pre-fire and post-fire periods (same as original)
     period_colors <- c("Pre-fire" = "#68C6C0", "Post-fire" = "#dd5858")
@@ -1354,29 +1355,35 @@ server <- function(input, output, session) {
           pre_count_norm = if (pre_total > 0) pre_count / pre_total else 0,
           post_count_norm = if (post_total > 0) post_count / post_total else 0,
           # Calculate ratio and absolute difference based on normalized counts
-          ratio = (post_count_norm + 0.001) / (pre_count_norm + 0.001)
+          ratio = (post_count_norm + 0.001) / (pre_count_norm + 0.001),
+          diff = post_count_norm - pre_count_norm
         )
     } else {
       # For non-normalized, calculate standard ratio and difference
       combined <- combined %>%
         mutate(
           # Add small constant to avoid division by zero
-          ratio = (post_count + 0.1) / (pre_count + 0.1)
+          ratio = (post_count + 0.1) / (pre_count + 0.1),
+          diff = post_count - pre_count
         )
     }
 
     # Filter for top 10 species
     combined <- combined %>%
-      arrange(desc(ratio)) %>%
+      arrange(desc(diff)) %>%
       slice_head(n = 10)
 
     # Create labels and reshape for plotting
     combined <- combined %>%
       mutate(
         # Create label combining name and ratio
-        label = sprintf("%s\n(%.1fx)", scientific_name, ratio),
+        label = if (input$relative_prop) {
+          sprintf("%s\n(+%.3f)", scientific_name, diff)
+        } else {
+          sprintf("%s\n(+%d)", scientific_name, round(diff))
+        },
         # Factor for plotting order
-        label = factor(label, levels = label[order(ratio)])
+        label = factor(label, levels = label[order(diff)])
       ) %>%
       # Reshape for plotting
       pivot_longer(
@@ -1441,7 +1448,7 @@ server <- function(input, output, session) {
       labs(
         title = "Species Most Influenced by Fire",
         subtitle = "Top 10 species with greatest pre-fire to post-fire change",
-        x = "Species (with post-fire/pre-fire ratio)",
+        x = "Species (with post- and pre- fire difference)",
         y = if (input$relative_prop) "Relative Proportion" else "Count"
       )
 
