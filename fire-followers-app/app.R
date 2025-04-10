@@ -202,24 +202,35 @@ ui <- fluidPage(
             radioGroupButtons(
               inputId = "count_type",
               label = "Show total:",
-              choices = c("Species" = "Total Species", "Observations" = "Total Observations"),
+              choices = c("Species" = "Total Species", "Obs" = "Total Observations"),
               selected = "Total Observations",
-              justified = FALSE,
-              status = "primary",
-              width = "200px"
+              justified = TRUE,
+              status = "success",
+              size = "sm",
+              checkIcon = list(
+                yes = icon("check", lib = "font-awesome")
+              ),
+              width = "100%"
             ),
-            # Replace checkbox with prettier switchInput
-            prettySwitch(
-              inputId = "relative_prop",
-              label = "Normalize taxon-specific counts by total pre-fire or post-fire count across all taxa",
-              value = FALSE,
-              status = "primary",
-              slim = TRUE
+            # Replace prettySwitch with a better formatted label + description
+            tags$div(
+              tags$p(style = "margin-bottom: 5px;", "Normalize counts"),
+              prettySwitch(
+                inputId = "relative_prop",
+                label = NULL,
+                value = FALSE,
+                status = "primary",
+                slim = TRUE
+              ),
+              tags$p(
+                style = "color: #666; font-size: 0.9em; margin-bottom: 10px;",
+                "Shows proportion of observations rather than raw counts, useful for comparing across uneven sampling periods"
+              ),
             ),
             # Add HTML output to display the denominator values
             conditionalPanel(
               condition = "input.relative_prop == true",
-              htmlOutput("proportion_info", style = "padding-left: 20px; color: #666; font-style: italic;")
+              htmlOutput("proportion_info", style = "padding-left: 10px; color: #666; font-style: italic;")
             )
           )
         ),
@@ -655,20 +666,56 @@ server <- function(input, output, session) {
     print("output$fireMap: Rendering fire centroids map.")
     req(all_fires())
     fire_centroids <- st_centroid(all_fires())
+
+    # Create icons for selected and unselected fires
     fireIcons <- awesomeIcons(
-      icon = "fire",
+      icon = "fire-flame-curved",
       iconColor = "red",
       markerColor = "orange",
       library = "fa"
     )
-    leaflet() %>%
-      addTiles() %>%
+
+    selectedFireIcons <- awesomeIcons(
+      icon = "fire-flame-curved",
+      iconColor = "white",
+      markerColor = "blue",
+      library = "fa"
+    )
+
+    # Create the base map
+    map <- leaflet() %>%
+      addTiles()
+
+    # Add markers for unselected fires
+    unselected_fires <- fire_centroids
+    if (!is.null(input$fire_select) && length(input$fire_select) > 0) {
+      unselected_fires <- fire_centroids %>%
+        filter(!FIRE_NAME %in% input$fire_select)
+    }
+
+    map <- map %>%
       addAwesomeMarkers(
-        data = fire_centroids,
+        data = unselected_fires,
         label = ~FIRE_NAME,
         layerId = ~FIRE_NAME,
         icon = fireIcons
       )
+
+    # Add markers for selected fires if any are selected
+    if (!is.null(input$fire_select) && length(input$fire_select) > 0) {
+      selected_fires <- fire_centroids %>%
+        filter(FIRE_NAME %in% input$fire_select)
+
+      map <- map %>%
+        addAwesomeMarkers(
+          data = selected_fires,
+          label = ~FIRE_NAME,
+          layerId = ~FIRE_NAME,
+          icon = selectedFireIcons
+        )
+    }
+
+    map
   })
 
   # When a fire is clicked on the map, update the species richness fire select input.
