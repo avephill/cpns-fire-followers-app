@@ -116,6 +116,18 @@ ui <- fluidPage(
         visibility: visible;
         opacity: 1;
       }
+      /* Add styling for the fire selection map container */
+      .fire-map-container {
+        padding: 15px;
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        margin-bottom: 20px;
+      }
+      .fire-map-container h4 {
+        margin-bottom: 15px;
+      }
     "))
   ),
   titlePanel("CNPS Fire Followers Explorer"),
@@ -139,9 +151,11 @@ ui <- fluidPage(
         column(
           8,
           offset = 2,
-          h4("Please select a fire on the map to begin exploring data", style = "text-align: center; margin-top: 20px;"),
-          # p("Click on any fire marker to view biodiversity insights for that fire.", style = "text-align: center;"),
-          leafletOutput("fireMap", height = 450)
+          h5("Please select a fire on the map to begin exploring data", style = "text-align: center; margin-top: 15px;"),
+          div(
+            class = "fire-map-container",
+            leafletOutput("fireMap", height = 450)
+          )
         )
       ),
       br(),
@@ -507,16 +521,41 @@ server <- function(input, output, session) {
   # --- Reactive: Get all fires (one record per fire, using the largest fire by GIS_ACRES).
   all_fires <- reactive({
     print("all_fires: Retrieving all fire data.")
-    fires_info <- tbl(con, "frap") %>%
-      group_by(FIRE_NAME) %>%
-      slice_max(GIS_ACRES, with_ties = FALSE) %>%
-      collect()
-    fires_sf <- fires_info %>%
-      mutate(geometry = st_as_sfc(geom_wkt, crs = 4326) %>% st_zm(drop = TRUE)) %>%
-      st_as_sf() %>%
-      st_make_valid()
-    fires_sf
-  })
+    tryCatch(
+      {
+        fires_info <- tbl(con, "frap") %>%
+          # Do this because at the top we're only pulling fire_names that have gbif records associated with them
+          filter(FIRE_NAME %in% fire_names) |>
+          group_by(FIRE_NAME) %>%
+          slice_max(GIS_ACRES, with_ties = FALSE) %>%
+          collect()
+
+        if (nrow(fires_info) == 0) {
+          # Handle case where no fires are found
+          print("all_fires: No fires found matching the criteria")
+          return(NULL)
+        }
+
+        fires_sf <- fires_info %>%
+          mutate(geometry = st_as_sfc(geom_wkt, crs = 4326) %>% st_zm(drop = TRUE)) %>%
+          st_as_sf() %>%
+          st_make_valid()
+
+        # Ensure we have a valid sf object
+        if (!is(fires_sf, "sf") || nrow(fires_sf) == 0) {
+          print("all_fires: Failed to create a valid sf object")
+          return(NULL)
+        }
+
+        fires_sf
+      },
+      error = function(e) {
+        # Log the error
+        print(paste("Error in all_fires reactive:", e$message))
+        NULL
+      }
+    )
+  }) %>% bindCache(fire_names) # Cache based on fire_names since they don't change in a session
 
   # New reactive to get fire date based on selected fires
   fire_date <- reactive({
@@ -696,73 +735,154 @@ server <- function(input, output, session) {
     }
   }) %>% bindCache(input$fire_select, input$time_range, input$count_type)
 
+  # Separate reactive for fire centroids that properly depends on all_fires and fire_select
+  fire_centroids_filtered <- reactive({
+    print("fire_centroids_filtered: Processing fire centroids for map display")
+
+    # Get all fires first
+    all_fire_data <- all_fires()
+    if (is.null(all_fire_data)) {
+      print("fire_centroids_filtered: No fire data available")
+      return(NULL)
+    }
+
+    # Create centroids for all fires
+    all_centroids <- st_centroid(all_fire_data)
+
+    # Return a list with selected and unselected centroids
+    if (is.null(input$fire_select) || length(input$fire_select) == 0) {
+      # If no selection, all fires are unselected
+      list(
+        selected = NULL,
+        unselected = all_centroids,
+        all = all_centroids
+      )
+    } else if ("all" %in% input$fire_select) {
+      # If "all" is selected, all fires are selected
+      list(
+        selected = all_centroids,
+        unselected = NULL,
+        all = all_centroids
+      )
+    } else {
+      # Filter centroids based on selection
+      selected <- all_centroids %>% filter(FIRE_NAME %in% input$fire_select)
+      unselected <- all_centroids %>% filter(!FIRE_NAME %in% input$fire_select)
+
+      list(
+        selected = if (nrow(selected) > 0) selected else NULL,
+        unselected = if (nrow(unselected) > 0) unselected else NULL,
+        all = all_centroids
+      )
+    }
+  }) %>% bindCache(input$fire_select, fire_names) # Cache on both fire_names and fire_select
+
   # --- First Tab: Fire Centroids Map ---------------------------------------
   output$fireMap <- renderLeaflet({
-    print("output$fireMap: Rendering fire centroids map.")
-    req(all_fires())
-    fire_centroids <- st_centroid(all_fires())
+    print("output$fireMap: Initial render - creating base map only")
+
+    # Create a basic leaflet map (will be updated by observer)
+    leaflet() %>%
+      addProviderTiles("CartoDB.Positron") %>%
+      setView(lng = -119.5, lat = 37.5, zoom = 5) %>% # More zoomed out view of California
+      addControl(
+        html = "<div style='padding: 8px; background: white;'>Loading fire data...</div>",
+        position = "topright"
+      )
+  })
+
+  # Use an observer to update the map when fire selection changes
+  observe({
+    print("fireMap observer triggered - updating markers")
+
+    # Get all fires first
+    all_fire_data <- all_fires()
+    if (is.null(all_fire_data)) {
+      print("No fire data available")
+      return()
+    }
+
+    # Create centroids for all fires
+    centroids <- st_centroid(all_fire_data)
+    print(paste("Number of fires for map:", nrow(centroids)))
 
     # Create icons for selected and unselected fires
     fireIcons <- awesomeIcons(
       icon = "fire-flame-curved",
       iconColor = "#FFFFFF",
-      markerColor = "#E9967A",
+      markerColor = "orange", # Using predefined orange color for fire theme
       library = "fa"
     )
 
     selectedFireIcons <- awesomeIcons(
       icon = "fire-flame-curved",
-      iconColor = "white",
-      markerColor = "blue",
+      iconColor = "#FFFFFF",
+      markerColor = "cadetblue", # Using predefined lightblue color
       library = "fa"
     )
 
-    # Create the base map
-    map <- leaflet() %>%
-      addProviderTiles("CartoDB.Positron")
+    # Get the leaflet proxy to update existing map
+    proxy <- leafletProxy("fireMap")
+
+    # Clear existing markers and controls
+    proxy %>%
+      clearMarkers() %>%
+      clearControls()
 
     # Check if "all" is selected
     if (!is.null(input$fire_select) && "all" %in% input$fire_select) {
       # If "all" is selected, show all markers as selected
-      map <- map %>%
+      print("'All Fires' selected, showing all fires as selected")
+      proxy %>%
         addAwesomeMarkers(
-          data = fire_centroids,
+          data = centroids,
           label = ~FIRE_NAME,
-          layerId = ~FIRE_NAME,
+          layerId = ~FIRE_NAME, # Keep original FIRE_NAME as layer ID
           icon = selectedFireIcons
         )
-    } else {
-      # Add markers for unselected fires
-      unselected_fires <- fire_centroids
-      if (!is.null(input$fire_select) && length(input$fire_select) > 0) {
-        unselected_fires <- fire_centroids %>%
-          filter(!FIRE_NAME %in% input$fire_select)
-      }
-
-      map <- map %>%
+    } else if (is.null(input$fire_select) || length(input$fire_select) == 0) {
+      # If no fires selected, show all as unselected
+      print("No fires selected, showing all fires as unselected")
+      proxy %>%
         addAwesomeMarkers(
-          data = unselected_fires,
+          data = centroids,
           label = ~FIRE_NAME,
-          layerId = ~FIRE_NAME,
+          layerId = ~FIRE_NAME, # Keep original FIRE_NAME as layer ID
           icon = fireIcons
         )
+    } else {
+      # Specific fires selected
+      print(paste("Selected fires:", paste(input$fire_select, collapse = ", ")))
 
-      # Add markers for selected fires if any are selected
-      if (!is.null(input$fire_select) && length(input$fire_select) > 0) {
-        selected_fires <- fire_centroids %>%
-          filter(FIRE_NAME %in% input$fire_select)
+      # Use direct subsetting with [ ] instead of filter()
+      unselected <- centroids[!centroids$FIRE_NAME %in% input$fire_select, ]
+      selected <- centroids[centroids$FIRE_NAME %in% input$fire_select, ]
 
-        map <- map %>%
+      print(paste("Selected fires count:", nrow(selected)))
+      print(paste("Unselected fires count:", nrow(unselected)))
+
+      # Add markers for unselected fires if there are any
+      if (nrow(unselected) > 0) {
+        proxy %>%
           addAwesomeMarkers(
-            data = selected_fires,
+            data = unselected,
             label = ~FIRE_NAME,
-            layerId = ~FIRE_NAME,
+            layerId = ~FIRE_NAME, # Keep original FIRE_NAME as layer ID
+            icon = fireIcons
+          )
+      }
+
+      # Add markers for selected fires if there are any
+      if (nrow(selected) > 0) {
+        proxy %>%
+          addAwesomeMarkers(
+            data = selected,
+            label = ~FIRE_NAME,
+            layerId = ~FIRE_NAME, # Keep original FIRE_NAME as layer ID
             icon = selectedFireIcons
           )
       }
     }
-
-    map
   })
 
   # When a fire is clicked on the map, update the species richness fire select input.
@@ -770,10 +890,19 @@ server <- function(input, output, session) {
     click <- input$fireMap_marker_click
     selected_fire_name <- click$id
     print(paste("Fire selected from map:", selected_fire_name))
+
+    # Extract the actual fire name if it contains "unselected_" or "selected_" prefix
+    if (grepl("^(un)?selected_", selected_fire_name)) {
+      selected_fire_name <- sub("^(un)?selected_", "", selected_fire_name)
+    }
+
+    print(paste("Processed fire name for selection:", selected_fire_name))
+
     # Combine the new fire with any existing selection (ensuring uniqueness)
     current <- isolate(input$fire_select)
     new_selection <- unique(c(current, selected_fire_name))
     updateSelectizeInput(session, "fire_select", selected = new_selection)
+
     # Automatically switch to the Biodiversity Insights tab.
     updateTabsetPanel(session, "tabs", selected = "Biodiversity Insights")
   })
