@@ -265,26 +265,26 @@ ui <- fluidPage(
               ),
               width = "100%"
             ),
-            # Replace prettySwitch with a better formatted label + description
-            tags$div(
-              # style = "display: flex; flex-direction: column; align-items: center; gap: 5px;",
-              tags$p(style = "margin: 0; font-weight: bold; font-size: 14px;", "Normalize counts:"),
-              switchInput(
-                inputId = "relative_prop",
-                label = "Normalized",
-                labelWidth = "100px",
-                value = FALSE,
-                size = "small"
-              ),
-              tags$p(
-                style = "color: #666; font-size: 0.9em; margin: 0; text-align: center;",
-                "(Shows proportion of observations rather than raw counts, useful for comparing across uneven sampling periods)"
-              ),
+            # Replace the indented div with a standard layout
+            h4("Normalize counts"),
+            switchInput(
+              inputId = "relative_prop",
+              label = "Normalized",
+              labelWidth = "100px",
+              value = FALSE,
+              size = "small"
+            ),
+            tags$p(
+              style = "color: #6c757d; font-size: 0.85em; margin: 5px 0 0 0;",
+              "(Shows proportion of observations rather than raw counts, useful for comparing across uneven sampling periods)"
             ),
             # Add HTML output to display the denominator values
             conditionalPanel(
               condition = "input.relative_prop == true",
-              htmlOutput("proportion_info", style = "padding-left: 10px; color: #666; font-style: italic;")
+              tags$div(
+                style = "margin-top: 8px; padding: 8px; background: #e9ecef; border-radius: 4px;",
+                htmlOutput("proportion_info", style = "color: #495057; font-size: 0.85em;")
+              )
             )
           ),
 
@@ -678,7 +678,7 @@ server <- function(input, output, session) {
     fireIcons <- awesomeIcons(
       icon = "fire-flame-curved",
       iconColor = "#FFFFFF",
-      markerColor = "#CD5C5C",
+      markerColor = "#E9967A",
       library = "fa"
     )
 
@@ -893,13 +893,23 @@ server <- function(input, output, session) {
     grid_pre$count <- count_points(grid_pre, spp_pre)
     grid_post$count <- count_points(grid_post, spp_post)
 
-    # If relative proportion is requested, use the reactive total values
+    # If relative proportion is requested, we need to calculate cell-specific totals
     if (input$relative_prop) {
-      pre_total <- total_pre_all_taxa()
-      post_total <- total_post_all_taxa()
+      # Get all species points (without taxon filtering)
+      req(all_species_points())
+      all_spp_sf <- all_species_points()
 
-      grid_pre$count <- ifelse(pre_total > 0, grid_pre$count / pre_total, 0)
-      grid_post$count <- ifelse(post_total > 0, grid_post$count / post_total, 0)
+      # Split all species points into pre and post fire periods
+      all_spp_pre <- all_spp_sf %>% filter(as.Date(observed_on) < f_date)
+      all_spp_post <- all_spp_sf %>% filter(as.Date(observed_on) >= f_date)
+
+      # Calculate all-taxa totals for each grid cell
+      grid_pre$total <- count_points(grid_pre, all_spp_pre)
+      grid_post$total <- count_points(grid_post, all_spp_post)
+
+      # Normalize each cell individually by dividing by its all-taxa total
+      grid_pre$count <- ifelse(grid_pre$total > 0, grid_pre$count / grid_pre$total, 0)
+      grid_post$count <- ifelse(grid_post$total > 0, grid_post$count / grid_post$total, 0)
     }
 
     list(pre = grid_pre, post = grid_post, fire = fire_sf)
@@ -947,7 +957,7 @@ server <- function(input, output, session) {
       }
     }
     pre_map <- leaflet() %>%
-      addTiles() %>%
+      addProviderTiles("CartoDB.Positron") %>%
       addControl(
         html = "<h4 style='text-align:center; margin:0; background-color:white; padding:5px; border-radius:3px; box-shadow:0 0 5px rgba(0,0,0,0.2);'>Pre-Fire</h4>",
         position = "topright"
@@ -988,7 +998,7 @@ server <- function(input, output, session) {
       }
     }
     post_map <- leaflet() %>%
-      addTiles() %>%
+      addProviderTiles("CartoDB.Positron") %>%
       addControl(
         html = "<h4 style='text-align:center; margin:0; background-color:white; padding:5px; border-radius:3px; box-shadow:0 0 5px rgba(0,0,0,0.2);'>Post-Fire</h4>",
         position = "topright"
@@ -1338,9 +1348,11 @@ server <- function(input, output, session) {
 
     # Create HTML output with the total values
     HTML(paste0(
-      "Denominator totals:<br>",
-      "Pre-fire: ", pre_total, " ", count_type_text, "<br>",
-      "Post-fire: ", post_total, " ", count_type_text
+      "<div style='font-weight: 600; margin-bottom: 5px;'>Denominator totals:</div>",
+      "<div style='display: grid; gap: 3px;'>",
+      "<div>Pre-fire: <span style='font-weight: 500;'>", pre_total, " ", count_type_text, "</span></div>",
+      "<div>Post-fire: <span style='font-weight: 500;'>", post_total, " ", count_type_text, "</span></div>",
+      "</div>"
     ))
   })
 
