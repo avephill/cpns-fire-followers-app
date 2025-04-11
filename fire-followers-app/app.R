@@ -84,7 +84,7 @@ ui <- fluidPage(
         border-radius: 6px;
         padding: 8px;
         position: absolute;
-        z-index: 1;
+        z-index: 9999;
         bottom: 125%;
         left: 50%;
         margin-left: -100px;
@@ -227,7 +227,7 @@ ui <- fluidPage(
             # Single selectizeInput for taxonomic filtering across all levels.
             selectizeInput("taxa_filter",
               div(
-                "Taxa Filter",
+                "Taxa Filter:",
                 tags$span(
                   class = "help-tooltip",
                   "?",
@@ -265,18 +265,28 @@ ui <- fluidPage(
               ),
               width = "100%"
             ),
-            # Replace the indented div with a standard layout
-            h4("Normalize counts"),
-            switchInput(
-              inputId = "relative_prop",
-              label = "Normalized",
-              labelWidth = "100px",
-              value = FALSE,
-              size = "small"
-            ),
-            tags$p(
-              style = "color: #6c757d; font-size: 0.85em; margin: 5px 0 0 0;",
-              "(Shows proportion of observations rather than raw counts, useful for comparing across uneven sampling periods)"
+            # Create a cleaner solution with direct divs
+            tags$div(
+              style = "margin-bottom: 15px;",
+              tags$div(
+                style = "margin-bottom: 5px; font-weight: bold;",
+                "Normalize counts:",
+                tags$span(
+                  class = "help-tooltip",
+                  "?",
+                  tags$span(
+                    class = "tooltip-text",
+                    "Shows proportion of observations rather than raw counts, useful for comparing across uneven sampling periods"
+                  )
+                )
+              ),
+              switchInput(
+                inputId = "relative_prop",
+                label = "Normalized",
+                labelWidth = "100px",
+                value = FALSE,
+                size = "small"
+              )
             ),
             # Add HTML output to display the denominator values
             conditionalPanel(
@@ -388,24 +398,32 @@ server <- function(input, output, session) {
       arrange(ALARM_DATE)
 
     # Format for display
-    date_strings <- paste(fire_dates$FIRE_NAME, ":", fire_dates$ALARM_DATE)
-    dates_html <- paste(date_strings, collapse = ", ")
+    date_strings <- paste0("<i>", fire_dates$FIRE_NAME, "</i>: ", fire_dates$ALARM_DATE)
+    dates_html <- paste(date_strings, collapse = "<br>")
 
     # Use the first fire's date for slider range calculation
     alarm_date <- fire_dates$ALARM_DATE[1]
     new_start <- alarm_date - (365 * 4)
     new_end <- alarm_date + (365 * 4)
 
-    sliderInput("time_range",
-      label = HTML(paste(
-        "Select date range for observations", "<br>",
-        "<span style='font-weight:normal; font-style:italic;'>Fire alarm dates: ", dates_html, "</span>"
-      )),
-      min = as.Date("2015-01-01"),
-      max = Sys.Date(),
-      value = c(new_start, new_end),
-      step = 30,
-      timeFormat = "%Y-%m"
+    tagList(
+      sliderInput("time_range",
+        label = "Select date range for observations",
+        min = as.Date("2015-01-01"),
+        max = Sys.Date(),
+        value = c(new_start, new_end),
+        step = 30,
+        timeFormat = "%Y-%m"
+      ),
+      tags$div(
+        style = "margin-top: 8px; padding: 8px; background: #e9ecef; border-radius: 4px;",
+        HTML(paste0(
+          "<div style='font-weight: 600; margin-bottom: 5px;'>Fire alarm dates:</div>",
+          "<div style='display: grid; gap: 3px;'>",
+          dates_html,
+          "</div>"
+        ))
+      )
     )
   })
 
