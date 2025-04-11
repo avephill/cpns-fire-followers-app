@@ -70,23 +70,29 @@ scon |> dbExecute("INSTALL spatial; LOAD spatial;")
 
 # Attach the working database instead of copying it
 scon |> dbExecute("ATTACH '/home/ahill/Projects/fire-followers/data/working-db.db' AS workingdb;")
-
+scon |> tbl("workingdb.frap")
 # Select sample fires
 select_fires <- c("GLASS", "CZU LIGHTNING COMPLEX", "BOBCAT", "CREEK", "DOLAN")
 
 # Move FRAP over
 scon |> dbExecute(
   sprintf("CREATE TABLE shiny.frap AS
-(SELECT * FROM workingdb.frap
-WHERE FIRE_NAME IN ('%s'))
+(
+SELECT * FROM workingdb.frap
+-- WHERE FIRE_NAME IN ('%s')
+WHERE GIS_ACRES > 5000
+)
 ", paste(select_fires, collapse = "','"))
 )
 
 # Copy GBIF points over
 scon |> dbExecute(
   sprintf("CREATE OR REPLACE TABLE shiny.gbif_frap AS
-(SELECT * FROM workingdb.gbif_frap
-WHERE FIRE_NAME IN ('%s'))
+(
+SELECT * FROM workingdb.gbif_frap
+-- WHERE FIRE_NAME IN ('%s')
+WHERE GIS_ACRES > 5000
+)
 ", paste(select_fires, collapse = "','"))
 )
 
@@ -105,6 +111,7 @@ writeRaster(mtbs2020, "fire-followers-app/data/mtbs_2020.tif")
 plot(mtbs2020)
 
 # Add MTBS to gbif_frap table in database ---------------------------------------
+library(terra)
 
 # Extract the points from the gbif_frap table
 gbif_points <- scon |>
@@ -117,7 +124,7 @@ points_sf <- st_as_sf(gbif_points, coords = c("longitude", "latitude"), crs = 43
 points_vect <- vect(points_sf)
 
 # Load the MTBS raster
-mtbs2020 <- rast("fire-followers-app/data/mtbs_2020.tif")
+mtbs2020 <- rast("data/mtbs_2020.tif")
 
 # Extract values from raster at each point
 severity_values <- terra::extract(mtbs2020, points_vect)
