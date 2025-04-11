@@ -285,6 +285,13 @@ ui <- fluidPage(
               condition = "input.relative_prop == true",
               htmlOutput("proportion_info", style = "padding-left: 10px; color: #666; font-style: italic;")
             )
+          ),
+
+          # Add new wellPanel for data download
+          wellPanel(
+            h4("Download Data"),
+            p("Download the filtered observation data as a CSV file:"),
+            downloadButton("downloadData", "Download CSV", class = "btn-primary")
           )
         ),
         mainPanel(
@@ -1505,6 +1512,37 @@ server <- function(input, output, session) {
 
     p
   })
+
+  # Add new download handler for filtered data
+  output$downloadData <- downloadHandler(
+    filename = function() {
+      paste("fire_followers_data_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv", sep = "")
+    },
+    content = function(file) {
+      req(filtered_gbif_data())
+
+      # Get the filtered data
+      filtered_data <- filtered_gbif_data()
+
+      # If the query is empty, show a notification
+      if (filtered_data$empty) {
+        showNotification("No data available to download with current filters.", type = "warning")
+        return()
+      }
+
+      # Collect the data and write to CSV
+
+      data_to_download <- filtered_data$query |>
+        select(-geom) |>
+        filter(geoprivacy != "obscured") |>
+        collect()
+      # data_to_download |>
+      #   slice_head(n = 10) |>
+      #   View()
+      # browser()
+      write.csv(data_to_download, file, row.names = FALSE)
+    }
+  )
 
   # Close the DuckDB connection when the session ends.
   session$onSessionEnded(function() {
