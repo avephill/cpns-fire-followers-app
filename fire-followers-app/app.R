@@ -72,6 +72,15 @@ ui <- fluidPage(
         position: relative;
         top: -2px;
       }
+      /* Add styling for download button container */
+      .well-panel-download {
+        padding: 15px;
+        margin-bottom: 0;
+      }
+      .well-panel-download .btn {
+        width: 100%;
+        margin-top: 10px;
+      }
       .help-tooltip:hover {
         background-color: #d0d0d0;
       }
@@ -300,6 +309,7 @@ ui <- fluidPage(
 
           # Add new wellPanel for data download
           wellPanel(
+            class = "well-panel-download",
             h4("Download Data"),
             p("Download the filtered observation data as a CSV file:"),
             downloadButton("downloadData", "Download CSV", class = "btn-primary")
@@ -711,33 +721,45 @@ server <- function(input, output, session) {
     map <- leaflet() %>%
       addProviderTiles("CartoDB.Positron")
 
-    # Add markers for unselected fires
-    unselected_fires <- fire_centroids
-    if (!is.null(input$fire_select) && length(input$fire_select) > 0) {
-      unselected_fires <- fire_centroids %>%
-        filter(!FIRE_NAME %in% input$fire_select)
-    }
-
-    map <- map %>%
-      addAwesomeMarkers(
-        data = unselected_fires,
-        label = ~FIRE_NAME,
-        layerId = ~FIRE_NAME,
-        icon = fireIcons
-      )
-
-    # Add markers for selected fires if any are selected
-    if (!is.null(input$fire_select) && length(input$fire_select) > 0) {
-      selected_fires <- fire_centroids %>%
-        filter(FIRE_NAME %in% input$fire_select)
-
+    # Check if "all" is selected
+    if (!is.null(input$fire_select) && "all" %in% input$fire_select) {
+      # If "all" is selected, show all markers as selected
       map <- map %>%
         addAwesomeMarkers(
-          data = selected_fires,
+          data = fire_centroids,
           label = ~FIRE_NAME,
           layerId = ~FIRE_NAME,
           icon = selectedFireIcons
         )
+    } else {
+      # Add markers for unselected fires
+      unselected_fires <- fire_centroids
+      if (!is.null(input$fire_select) && length(input$fire_select) > 0) {
+        unselected_fires <- fire_centroids %>%
+          filter(!FIRE_NAME %in% input$fire_select)
+      }
+
+      map <- map %>%
+        addAwesomeMarkers(
+          data = unselected_fires,
+          label = ~FIRE_NAME,
+          layerId = ~FIRE_NAME,
+          icon = fireIcons
+        )
+
+      # Add markers for selected fires if any are selected
+      if (!is.null(input$fire_select) && length(input$fire_select) > 0) {
+        selected_fires <- fire_centroids %>%
+          filter(FIRE_NAME %in% input$fire_select)
+
+        map <- map %>%
+          addAwesomeMarkers(
+            data = selected_fires,
+            label = ~FIRE_NAME,
+            layerId = ~FIRE_NAME,
+            icon = selectedFireIcons
+          )
+      }
     }
 
     map
