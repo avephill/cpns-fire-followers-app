@@ -267,16 +267,17 @@ ui <- fluidPage(
             ),
             # Replace prettySwitch with a better formatted label + description
             tags$div(
-              tags$p(style = "margin-bottom: 5px; font-weight: bold; font-size: 14px;", "Normalize counts:"),
-              prettySwitch(
+              # style = "display: flex; flex-direction: column; align-items: center; gap: 5px;",
+              tags$p(style = "margin: 0; font-weight: bold; font-size: 14px;", "Normalize counts:"),
+              switchInput(
                 inputId = "relative_prop",
-                label = NULL,
+                label = "Normalized",
+                labelWidth = "100px",
                 value = FALSE,
-                status = "primary",
-                slim = TRUE
+                size = "small"
               ),
               tags$p(
-                style = "color: #666; font-size: 0.9em; margin-bottom: 10px;",
+                style = "color: #666; font-size: 0.9em; margin: 0; text-align: center;",
                 "(Shows proportion of observations rather than raw counts, useful for comparing across uneven sampling periods)"
               ),
             ),
@@ -676,8 +677,8 @@ server <- function(input, output, session) {
     # Create icons for selected and unselected fires
     fireIcons <- awesomeIcons(
       icon = "fire-flame-curved",
-      iconColor = "red",
-      markerColor = "orange",
+      iconColor = "#FFFFFF",
+      markerColor = "#CD5C5C",
       library = "fa"
     )
 
@@ -690,7 +691,7 @@ server <- function(input, output, session) {
 
     # Create the base map
     map <- leaflet() %>%
-      addTiles()
+      addProviderTiles("CartoDB.Positron")
 
     # Add markers for unselected fires
     unselected_fires <- fire_centroids
@@ -1534,12 +1535,13 @@ server <- function(input, output, session) {
 
       data_to_download <- filtered_data$query |>
         select(-geom) |>
-        filter(geoprivacy != "obscured") |>
+        # These should be the same, but just making extra sure
+        filter(
+          geoprivacy != "obscured",
+          coordinates_obscured == FALSE
+        ) |>
         collect()
-      # data_to_download |>
-      #   slice_head(n = 10) |>
-      #   View()
-      # browser()
+
       write.csv(data_to_download, file, row.names = FALSE)
     }
   )

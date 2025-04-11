@@ -126,6 +126,21 @@ body {
   background-color: var(--cnps-green) !important;
 }
 
+/* SwitchInput styling */
+.bootstrap-switch.bootstrap-switch-success {
+  border-color: var(--cnps-dark-green);
+}
+
+.bootstrap-switch.bootstrap-switch-success .bootstrap-switch-handle-on {
+  background-color: var(--cnps-green);
+  border-color: var(--cnps-dark-green);
+}
+
+.bootstrap-switch.bootstrap-switch-success .bootstrap-switch-handle-off {
+  background-color: #f8f9fa;
+  border-color: var(--cnps-dark-green);
+}
+
 /* Map Container styling */
 #sync-maps {
   display: flex !important;
