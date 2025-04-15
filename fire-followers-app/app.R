@@ -299,16 +299,19 @@ ui <- fluidPage(
                   "?",
                   tags$span(
                     class = "tooltip-text",
-                    "Shows proportion of observations rather than raw counts, useful for comparing across uneven sampling periods"
+                    "Shows proportion of selected taxon count to all taxa counts for a given period and fire, useful for mitigating the effects of sampling effort."
                   )
                 )
               ),
-              switchInput(
-                inputId = "relative_prop",
-                label = "Normalized",
-                labelWidth = "100px",
-                value = FALSE,
-                size = "small"
+              tags$div(
+                style = "display: flex; justify-content: center;",
+                switchInput(
+                  inputId = "relative_prop",
+                  label = "Normalized",
+                  labelWidth = "100px",
+                  value = FALSE,
+                  size = "small"
+                )
               )
             ),
             # Add HTML output to display the denominator values
@@ -422,8 +425,8 @@ server <- function(input, output, session) {
       arrange(ALARM_DATE)
 
     # Format for display
-    date_strings <- paste0("<i>", fire_dates$FIRE_NAME, "</i>: ", fire_dates$ALARM_DATE)
-    dates_html <- paste(date_strings, collapse = "<br>")
+    date_strings <- paste0("<div style='margin-top: 3px;'><i>", fire_dates$FIRE_NAME, "</i>: ", fire_dates$ALARM_DATE, "</div>")
+    dates_html <- paste(date_strings, collapse = "")
 
     # Use the first fire's date for slider range calculation
     alarm_date <- fire_dates$ALARM_DATE[1]
@@ -443,9 +446,7 @@ server <- function(input, output, session) {
         style = "margin-top: 8px; padding: 8px; background: #e9ecef; border-radius: 4px;",
         HTML(paste0(
           "<div style='font-weight: 600; margin-bottom: 5px;'>Fire alarm dates:</div>",
-          "<div style='display: grid; gap: 3px;'>",
-          dates_html,
-          "</div>"
+          dates_html
         ))
       )
     )
