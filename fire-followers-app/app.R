@@ -72,6 +72,29 @@ ui <- fluidPage(
         position: relative;
         top: -2px;
       }
+      /* Reduce space between tabs */
+      .tabbable > .nav > li > a {
+        padding-top: 5px;
+        padding-bottom: 5px;
+      }
+      /* Reduce space between main tabs and nested tabset panel */
+      .mainPanel > .tabbable {
+        margin-top: -10px;
+      }
+      #richness_tabs {
+        margin-top: 0;
+      }
+      /* Further reduce spacing within tab content */
+      .tab-content {
+        padding-top: 0 !important;
+      }
+      .tab-pane {
+        padding-top: 0;
+        margin-top: 0;
+      }
+      .tabbable .nav-tabs {
+        margin-bottom: 5px;
+      }
       /* Add styling for download button container */
       .well-panel-download {
         padding: 15px;
@@ -128,9 +151,33 @@ ui <- fluidPage(
       .fire-map-container h4 {
         margin-bottom: 15px;
       }
+      /* App title styling */
+      .app-title {
+        text-align: center;
+        margin-bottom: 20px;
+        padding-bottom: 15px;
+        border-bottom: 2px solid #4d7b43;
+      }
+      .app-title h1 {
+        color: #345930;
+        font-weight: 700;
+        margin-bottom: 5px;
+      }
+      .app-title p {
+        color: #6a9a61;
+        font-size: 16px;
+        max-width: 800px;
+        margin: 0 auto;
+      }
     "))
   ),
-  titlePanel("CNPS Fire Followers Explorer"),
+
+  # Custom title panel with description
+  div(
+    class = "app-title",
+    h1("CNPS Fire Followers Explorer") # ,
+    # p("Visualize and analyze plant biodiversity patterns before and after wildfire events in California")
+  ),
 
   # JavaScript to prevent clicks on disabled tabs
   tags$script(HTML(
@@ -151,63 +198,88 @@ ui <- fluidPage(
         column(
           8,
           offset = 2,
-          h5("Please select a fire on the map to begin exploring data", style = "text-align: center; margin-top: 15px;"),
+          h5("Please select a fire on the map to begin exploring data", style = "text-align: center; margin-top: 15px; color: #345930; font-weight: 500;"),
           div(
             class = "fire-map-container",
             leafletOutput("fireMap", height = 450)
           )
         )
       ),
-      br(),
+      # br(),
       fluidRow(
         column(10,
           offset = 1,
           br(),
-          p("The CNPS Fire Followers Explorer is an interactive application designed to explore plant biodiversity
-            patterns before and after wildfire events in California using data from the CNPS California Fire Followers 2020 iNaturalist project. This tool allows users to visualize and analyze
-            how plant communities respond to fires of different severities and how species composition changes over time."),
-          p(
-            "This application was developed as a joint collaboration between the",
-            tags$b("California Native Plant Society"), "and",
-            tags$b("Avery Hill"), "at the California Academy of Sciences."
-          ),
-          h3("Data Sources"),
-          tags$ul(
-            tags$li(
-              "Observation data was accessed from the iNaturalist project: ",
-              tags$a(
-                href = "https://www.inaturalist.org/projects/california-fire-followers-2020-data-management",
-                "California Fire Followers 2020", target = "_blank"
-              )
-            ),
-            tags$li(
-              "Fire perimeter data came from the California Department of Forestry and Fire Protection: ",
-              tags$a(
-                href = "https://www.fire.ca.gov/what-we-do/fire-resource-assessment-program/fire-perimeters",
-                "Fire Resource Assessment Program", target = "_blank"
-              )
-            ),
-            tags$li(
-              "Fire severity data came from the Monitoring Trends in Burn Severity (MTBS) project: ",
-              tags$a(
-                href = "https://www.mtbs.gov/index.php/project-overview",
-                "MTBS Project Overview", target = "_blank"
+          div(
+            class = "card",
+            div(
+              class = "card-body",
+              p("The CNPS Fire Followers Explorer is an interactive application designed to explore plant biodiversity
+                patterns before and after wildfire events in California using data from the CNPS California Fire Followers 2020 iNaturalist project. This tool allows users to visualize and analyze
+                how plant communities respond to fires of different severities and how species composition changes over time."),
+              p(
+                "This application was developed as a joint collaboration between the",
+                tags$b("California Native Plant Society"), "and",
+                tags$b("Avery Hill"), "at the California Academy of Sciences."
               )
             )
           ),
-          h3("Technical Details"),
-          p("This application was built using R Shiny, an open-source framework for building interactive web
-            applications. It uses DuckDB for efficient data storage and processing, and various spatial libraries
-            for visualization and analysis."),
-          p(tags$a(
-            href = "https://github.com/avephill/cpns-fire-followers-app",
-            "View project on GitHub", target = "_blank"
-          )),
-          br(),
-          hr(),
-          p(
-            style = "color: #666; font-style: italic;",
-            "Created: ", format(Sys.Date(), "%B %Y")
+          div(
+            class = "card", style = "margin-top: 25px;",
+            div(
+              class = "card-header",
+              h3("Data Sources", style = "margin-top: 0;")
+            ),
+            div(
+              class = "card-body",
+              tags$ul(
+                tags$li(
+                  "Observation data was accessed from the iNaturalist project: ",
+                  tags$a(
+                    href = "https://www.inaturalist.org/projects/california-fire-followers-2020-data-management",
+                    "California Fire Followers 2020", target = "_blank"
+                  )
+                ),
+                tags$li(
+                  "Fire perimeter data came from the California Department of Forestry and Fire Protection: ",
+                  tags$a(
+                    href = "https://www.fire.ca.gov/what-we-do/fire-resource-assessment-program/fire-perimeters",
+                    "Fire Resource Assessment Program", target = "_blank"
+                  )
+                ),
+                tags$li(
+                  "Fire severity data came from the Monitoring Trends in Burn Severity (MTBS) project: ",
+                  tags$a(
+                    href = "https://www.mtbs.gov/index.php/project-overview",
+                    "MTBS Project Overview", target = "_blank"
+                  )
+                )
+              )
+            )
+          ),
+          div(
+            class = "card", style = "margin-top: 25px;",
+            div(
+              class = "card-header",
+              h3("Technical Details", style = "margin-top: 0;")
+            ),
+            div(
+              class = "card-body",
+              p("This application was built using R Shiny, an open-source framework for building interactive web
+                applications. It uses DuckDB for efficient data storage and processing, and various spatial libraries
+                for visualization and analysis."),
+              p(tags$a(
+                href = "https://github.com/avephill/cpns-fire-followers-app",
+                "View project on GitHub", target = "_blank"
+              ))
+            )
+          ),
+          div(
+            style = "margin-top: 30px; text-align: center;", class = "footer",
+            p(
+              style = "color: #666; font-style: italic;",
+              "Created: ", format(Sys.Date(), "%B %Y")
+            )
           )
         )
       )
@@ -231,7 +303,7 @@ ui <- fluidPage(
                   "?",
                   tags$span(
                     class = "tooltip-text",
-                    "You can select multiple fires by clicking or using the search box"
+                    "You can select multiple fires by going back to the 'select fire' map or using the search box here. You can also select 'All Fires'"
                   )
                 )
               ),
@@ -241,7 +313,8 @@ ui <- fluidPage(
               options = list(placeholder = "Search for fires")
             ),
             # Render time slider dynamically with fire alarm date in the label.
-            uiOutput("time_range_ui")
+            uiOutput("time_range_ui"),
+            style = "background-color: white; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.1);"
           ),
 
           # Observation-related filters
@@ -318,10 +391,11 @@ ui <- fluidPage(
             conditionalPanel(
               condition = "input.relative_prop == true",
               tags$div(
-                style = "margin-top: 8px; padding: 8px; background: #e9ecef; border-radius: 4px;",
-                htmlOutput("proportion_info", style = "color: #495057; font-size: 0.85em;")
+                style = "margin-top: 8px; padding: 8px; background: #f5f1e8; border-radius: 6px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);",
+                htmlOutput("proportion_info")
               )
-            )
+            ),
+            style = "background-color: white; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.1);"
           ),
 
           # Add new wellPanel for data download
@@ -329,7 +403,8 @@ ui <- fluidPage(
             class = "well-panel-download",
             h4("Download Data"),
             p("Download the filtered observation data as a CSV file:"),
-            downloadButton("downloadData", "Download CSV", class = "btn-primary")
+            downloadButton("downloadData", "Download CSV", class = "btn-primary"),
+            style = "background-color: white; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.1);"
           )
         ),
         mainPanel(
@@ -369,7 +444,8 @@ ui <- fluidPage(
                         href = "https://www.mtbs.gov", "Monitoring Trends in Burn Severity (MTBS)",
                         target = "_blank"
                       )
-                    )
+                    ),
+                    style = "background-color: white; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.1);"
                   )
                 )
               )
@@ -443,9 +519,9 @@ server <- function(input, output, session) {
         timeFormat = "%Y-%m"
       ),
       tags$div(
-        style = "margin-top: 8px; padding: 8px; background: #e9ecef; border-radius: 4px;",
+        style = "margin-top: 8px; padding: 8px; background: #f5f1e8; border-radius: 6px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);",
         HTML(paste0(
-          "<div style='font-weight: 600; margin-bottom: 5px;'>Fire alarm dates:</div>",
+          "<div style='font-weight: 600; margin-bottom: 5px; color: #345930;'>Fire alarm dates:</div>",
           dates_html
         ))
       )
@@ -507,10 +583,10 @@ server <- function(input, output, session) {
 
     choices <- c(
       setNames("all", "All taxa"),
-      setNames(paste0("class|", classes), paste0(classes, " <span style='color:gray;'>Class</span>")),
-      setNames(paste0("family|", families), paste0(families, " <span style='color:gray;'>Family</span>")),
-      setNames(paste0("genus|", genera), paste0(genera, " <span style='color:gray;'>Genus</span>")),
-      setNames(paste0("species|", species), paste0(species, " <span style='color:gray;'>Species</span>"))
+      setNames(paste0("class|", classes), paste0(classes, " <span style='color:#6a9a61; font-style: italic;'>Class</span>")),
+      setNames(paste0("family|", families), paste0(families, " <span style='color:#6a9a61; font-style: italic;'>Family</span>")),
+      setNames(paste0("genus|", genera), paste0(genera, " <span style='color:#6a9a61; font-style: italic;'>Genus</span>")),
+      setNames(paste0("species|", species), paste0(species, " <span style='color:#6a9a61; font-style: italic;'>Species</span>"))
     )
     updateSelectizeInput(session, "taxa_filter",
       choices = choices,
@@ -787,7 +863,7 @@ server <- function(input, output, session) {
       addProviderTiles("CartoDB.Positron") %>%
       setView(lng = -119.5, lat = 37.5, zoom = 5) %>% # More zoomed out view of California
       addControl(
-        html = "<div style='padding: 8px; background: white;'>Loading fire data...</div>",
+        html = "<div style='padding: 12px; background: white; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.1);'>Loading fire data...</div>",
         position = "topright"
       )
   })
@@ -1129,7 +1205,7 @@ server <- function(input, output, session) {
     pre_map <- leaflet() %>%
       addProviderTiles("CartoDB.Positron") %>%
       addControl(
-        html = "<h4 style='text-align:center; margin:0; background-color:white; padding:5px; border-radius:3px; box-shadow:0 0 5px rgba(0,0,0,0.2);'>Pre-Fire</h4>",
+        html = "<h4 style='text-align:center; margin:0; background-color:white; padding:8px; border-radius:6px; box-shadow:0 0 5px rgba(0,0,0,0.2); color: #345930;'>Pre-Fire</h4>",
         position = "topright"
       ) %>%
       addPolygons(
@@ -1170,7 +1246,7 @@ server <- function(input, output, session) {
     post_map <- leaflet() %>%
       addProviderTiles("CartoDB.Positron") %>%
       addControl(
-        html = "<h4 style='text-align:center; margin:0; background-color:white; padding:5px; border-radius:3px; box-shadow:0 0 5px rgba(0,0,0,0.2);'>Post-Fire</h4>",
+        html = "<h4 style='text-align:center; margin:0; background-color:white; padding:8px; border-radius:6px; box-shadow:0 0 5px rgba(0,0,0,0.2); color: #345930;'>Post-Fire</h4>",
         position = "topright"
       ) %>%
       addPolygons(
@@ -1340,16 +1416,25 @@ server <- function(input, output, session) {
       theme(
         axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
         axis.text.y = element_text(size = 12),
-        axis.title = element_text(size = 14),
-        plot.title = element_text(size = 16, face = "bold"),
+        axis.title = element_text(size = 14, face = "bold", color = "#345930"),
+        plot.title = element_text(size = 16, face = "bold", color = "#345930"),
+        plot.subtitle = element_text(size = 13, color = "#6a9a61"),
+        panel.grid.major = element_line(color = "#f0f0f0"),
+        panel.grid.minor = element_line(color = "#f9f9f9"),
+        panel.background = element_rect(fill = "white"),
+        plot.background = element_rect(fill = "white", color = NA),
         legend.title = element_blank(),
-        legend.position = "top"
+        legend.position = "top",
+        legend.background = element_rect(fill = "white", color = NA),
+        legend.key = element_rect(fill = "white", color = NA),
+        plot.margin = unit(c(1, 1, 1, 1), "cm")
       ) +
       labs(
         title = ifelse(input$count_type == "Total Species",
           "Species Richness by Fire Severity",
           "Observations by Fire Severity"
         ),
+        subtitle = "Distribution across MTBS fire severity classes",
         y = ifelse(input$relative_prop,
           "Relative Proportion",
           ifelse(input$count_type == "Total Species",
@@ -1485,20 +1570,29 @@ server <- function(input, output, session) {
         theme(
           axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
           axis.text.y = element_text(size = 12),
-          axis.title = element_text(size = 14),
-          plot.title = element_text(size = 16, face = "bold"),
+          axis.title = element_text(size = 14, face = "bold", color = "#345930"),
+          plot.title = element_text(size = 16, face = "bold", color = "#345930"),
+          plot.subtitle = element_text(size = 13, color = "#6a9a61"),
+          panel.grid.major = element_line(color = "#f0f0f0"),
+          panel.grid.minor = element_line(color = "#f9f9f9"),
+          panel.background = element_rect(fill = "white"),
+          plot.background = element_rect(fill = "white", color = NA),
           legend.title = element_blank(),
-          legend.position = "top"
+          legend.position = "top",
+          legend.background = element_rect(fill = "white", color = NA),
+          legend.key = element_rect(fill = "white", color = NA),
+          plot.margin = unit(c(1, 1, 1, 1), "cm")
         ) +
         labs(
           title = "Top 10 Observed Species",
-          x = "Species",
+          # subtitle = "Most frequently observed species before and after fire",
+          x = "",
           y = if (input$relative_prop) "Relative Proportion" else "Count"
         )
 
       # If the names are too long, try to wrap them
       if (any(nchar(levels(top10_data()$scientific_name)) > 30)) {
-        p <- p + scale_x_discrete(labels = function(x) str_wrap(x, width = 30))
+        p <- p + scale_x_discrete(labels = function(x) str_wrap(x, width = 25))
       }
 
       p
@@ -1518,10 +1612,10 @@ server <- function(input, output, session) {
 
     # Create HTML output with the total values
     HTML(paste0(
-      "<div style='font-weight: 600; margin-bottom: 5px;'>Denominator totals:</div>",
-      "<div style='display: grid; gap: 3px;'>",
-      "<div>Pre-fire: <span style='font-weight: 500;'>", pre_total, " ", count_type_text, "</span></div>",
-      "<div>Post-fire: <span style='font-weight: 500;'>", post_total, " ", count_type_text, "</span></div>",
+      "<div style='font-weight: 600; margin-bottom: 8px; color: #345930;'>Denominator totals:</div>",
+      "<div style='display: grid; gap: 5px;'>",
+      "<div>Pre-fire: <span style='font-weight: 500; color: #68C6C0;'>", pre_total, " ", count_type_text, "</span></div>",
+      "<div>Post-fire: <span style='font-weight: 500; color: #dd5858;'>", post_total, " ", count_type_text, "</span></div>",
       "</div>"
     ))
   })
@@ -1676,10 +1770,18 @@ server <- function(input, output, session) {
       theme(
         axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
         axis.text.y = element_text(size = 12),
-        axis.title = element_text(size = 14),
-        plot.title = element_text(size = 16, face = "bold"),
+        axis.title = element_text(size = 14, face = "bold", color = "#345930"),
+        plot.title = element_text(size = 16, face = "bold", color = "#345930"),
+        plot.subtitle = element_text(size = 13, color = "#6a9a61"),
+        panel.grid.major = element_line(color = "#f0f0f0"),
+        panel.grid.minor = element_line(color = "#f9f9f9"),
+        panel.background = element_rect(fill = "white"),
+        plot.background = element_rect(fill = "white", color = NA),
         legend.title = element_blank(),
-        legend.position = "top"
+        legend.position = "top",
+        legend.background = element_rect(fill = "white", color = NA),
+        legend.key = element_rect(fill = "white", color = NA),
+        plot.margin = unit(c(1, 1, 1, 1), "cm")
       ) +
       labs(
         title = "Species Most Influenced by Fire",
@@ -1690,7 +1792,7 @@ server <- function(input, output, session) {
 
     # If the names are too long, try to wrap them
     if (any(nchar(levels(fire_influence_data()$label)) > 30)) {
-      p <- p + scale_x_discrete(labels = function(x) str_wrap(x, width = 30))
+      p <- p + scale_x_discrete(labels = function(x) str_wrap(x, width = 25))
     }
 
     p

@@ -13,6 +13,8 @@
   --cnps-light-gray: #f8f8f8;
   --cnps-red: #dd5858;
   --cnps-teal: #68C6C0;
+  --cnps-shadow: 0 2px 6px rgba(0,0,0,0.1);
+  --border-radius: 6px;
 }
 
 /* Global styling */
@@ -21,6 +23,37 @@ body {
   color: #333;
   background-color: #ffffff;
   line-height: 1.5;
+}
+
+h3, h4, h5 {
+  color: var(--cnps-dark-green);
+  font-weight: 600;
+  margin-top: 1.5em;
+  margin-bottom: 0.8em;
+}
+
+a {
+  color: var(--cnps-green);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--cnps-dark-green);
+  text-decoration: underline;
+}
+
+/* Main page title */
+.shiny-output-error, .shiny-output-error-validation {
+  color: var(--cnps-red);
+  background-color: rgba(221, 88, 88, 0.1);
+  padding: 10px;
+  border-radius: var(--border-radius);
+  margin: 10px 0;
+}
+
+/* Page title */
+.title-panel {
+  margin: 10px 0 30px;
 }
 
 /* Header styling */
@@ -38,12 +71,16 @@ body {
 /* Tab styling */
 .nav-tabs {
   border-bottom: 1px solid var(--cnps-green);
+  margin-bottom: 20px;
 }
 
 .nav-tabs > li > a {
   color: var(--cnps-gray);
   margin-right: 2px;
-  border-radius: 4px 4px 0 0;
+  border-radius: 6px 6px 0 0;
+  padding: 10px 20px;
+  font-weight: 500;
+  transition: all 0.2s ease;
 }
 
 .nav-tabs > li > a:hover {
@@ -60,18 +97,35 @@ body {
   border-bottom-color: transparent;
 }
 
+/* Content containers */
+.tab-content {
+  padding: 5px 0;
+}
+
+.tab-pane {
+  margin-top: 0;
+}
+
+.tabbable {
+  margin-bottom: 10px;
+}
+
 /* Sidebar styling */
 .well.sidebar {
   background-color: white;
   border: 1px solid #e3e3e3;
-  border-radius: 4px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  border-radius: var(--border-radius);
+  box-shadow: var(--cnps-shadow);
+  padding: 20px;
 }
 
 .well {
   background-color: var(--cnps-light-gray);
   border: 1px solid rgba(0,0,0,0.05);
+  border-radius: var(--border-radius);
   box-shadow: none;
+  margin-bottom: 20px;
+  padding: 15px;
 }
 
 /* Panel headings */
@@ -80,27 +134,66 @@ body {
   font-weight: bold;
   font-size: 16px;
   border-bottom: 1px solid var(--cnps-light-green);
-  padding-bottom: 8px;
+  padding-bottom: 10px;
   margin-bottom: 15px;
 }
 
 /* Form elements */
 .form-control, .selectize-input {
   border: 1px solid #ddd;
-  border-radius: 4px;
+  border-radius: var(--border-radius);
   box-shadow: none;
+  transition: all 0.2s ease;
 }
 
-.selectize-input {
-  padding: 8px;
-}
-
-.selectize-input.focus {
+.form-control:focus, .selectize-input.focus {
   border-color: var(--cnps-green);
   box-shadow: 0 0 0 3px rgba(77, 123, 67, 0.1);
 }
 
+.selectize-input {
+  padding: 10px;
+}
+
+.selectize-dropdown {
+  border-radius: var(--border-radius);
+  border: 1px solid #ddd;
+  box-shadow: var(--cnps-shadow);
+}
+
+.selectize-dropdown-content {
+  padding: 5px 0;
+}
+
+.selectize-dropdown-content .option {
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.selectize-dropdown-content .option:hover {
+  background-color: var(--cnps-tan);
+}
+
+.selectize-dropdown-content .option.active {
+  background-color: var(--cnps-green);
+  color: white;
+}
+
+/* Labels */
+label {
+  font-weight: 600;
+  color: var(--cnps-dark-green);
+  margin-bottom: 8px;
+}
+
 /* Buttons */
+.btn {
+  border-radius: var(--border-radius);
+  font-weight: 500;
+  padding: 8px 16px;
+  transition: all 0.2s ease;
+}
+
 .btn-primary {
   background-color: var(--cnps-green);
   border-color: var(--cnps-dark-green);
@@ -109,9 +202,20 @@ body {
 .btn-primary:hover, .btn-primary:focus {
   background-color: var(--cnps-dark-green);
   border-color: var(--cnps-dark-green);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+  box-shadow: none;
 }
 
 /* Slider control */
+.irs {
+  margin: 25px 0;
+}
+
 .irs-bar, .irs-bar-edge {
   background: var(--cnps-green);
   border-color: var(--cnps-dark-green);
@@ -119,6 +223,19 @@ body {
 
 .irs-from, .irs-to, .irs-single {
   background: var(--cnps-green);
+  border-radius: var(--border-radius);
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
+.irs-handle {
+  border: 1px solid var(--cnps-dark-green);
+  background-color: white;
+  box-shadow: var(--cnps-shadow);
+}
+
+.irs-grid-text {
+  color: var(--cnps-gray);
 }
 
 /* Switchers and toggle buttons */
@@ -127,6 +244,11 @@ body {
 }
 
 /* SwitchInput styling */
+.bootstrap-switch {
+  border-radius: 20px !important;
+  border-color: var(--cnps-dark-green) !important;
+}
+
 .bootstrap-switch.bootstrap-switch-success {
   border-color: var(--cnps-dark-green);
 }
@@ -141,33 +263,177 @@ body {
   border-color: var(--cnps-dark-green);
 }
 
+/* Radio buttons and checkboxes */
+.radio-group-buttons .btn {
+  border-color: var(--cnps-green);
+  color: var(--cnps-dark-green);
+}
+
+.radio-group-buttons .btn.active {
+  background-color: var(--cnps-green);
+  color: white;
+}
+
+/* Help tooltips */
+.help-tooltip {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  line-height: 18px;
+  text-align: center;
+  border-radius: 50%;
+  background-color: #e0e0e0;
+  color: #666;
+  font-size: 12px;
+  margin-left: 5px;
+  cursor: help;
+  position: relative;
+  top: -2px;
+  transition: all 0.2s ease;
+}
+
+.help-tooltip:hover {
+  background-color: var(--cnps-light-green);
+  color: white;
+}
+
+.tooltip-text {
+  visibility: hidden;
+  width: 220px;
+  background-color: #333;
+  color: #fff;
+  text-align: center;
+  border-radius: var(--border-radius);
+  padding: 10px;
+  position: absolute;
+  z-index: 9999;
+  bottom: 125%;
+  left: 50%;
+  margin-left: -110px;
+  opacity: 0;
+  transition: opacity 0.3s;
+  font-size: 14px;
+  font-style: normal;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+}
+
+.tooltip-text::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-left: -5px;
+  border-width: 5px;
+  border-style: solid;
+  border-color: #333 transparent transparent transparent;
+}
+
+.help-tooltip:hover .tooltip-text {
+  visibility: visible;
+  opacity: 1;
+}
+
 /* Map Container styling */
+.fire-map-container {
+  padding: 20px;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: var(--border-radius);
+  box-shadow: var(--cnps-shadow);
+  margin-bottom: 25px;
+}
+
 #sync-maps {
   display: flex !important;
   flex-direction: row !important;
-  gap: 10px;
+  gap: 15px;
   margin-top: 15px;
 }
 
 #map_pre, #map_post {
   flex: 1;
-  border-radius: 4px;
+  border-radius: var(--border-radius);
   overflow: hidden;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+  box-shadow: var(--cnps-shadow);
 }
 
 .leaflet-container {
-  border-radius: 4px;
+  border-radius: var(--border-radius);
   border: 1px solid #eee;
+}
+
+.leaflet-control {
+  border-radius: var(--border-radius) !important;
+}
+
+.leaflet-popup-content-wrapper {
+  border-radius: var(--border-radius);
+}
+
+/* Legend styling */
+.info.legend {
+  background: white;
+  padding: 8px 10px;
+  border-radius: var(--border-radius);
+  box-shadow: var(--cnps-shadow);
+}
+
+.info.legend i {
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  opacity: 0.8;
 }
 
 /* Plot and visualization styling */
 .shiny-plot-output {
   background-color: white;
-  border-radius: 4px;
+  border-radius: var(--border-radius);
   border: 1px solid #eee;
-  padding: 10px;
+  padding: 15px;
   margin-top: 15px;
+  box-shadow: var(--cnps-shadow);
+  transition: all 0.2s ease;
+}
+
+.shiny-plot-output:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+/* Info panel styling */
+.info-panel {
+  background-color: var(--cnps-light-gray);
+  border-radius: var(--border-radius);
+  padding: 15px;
+  margin: 15px 0;
+  border-left: 4px solid var(--cnps-green);
+}
+
+/* Notification boxes */
+.bg-info, .bg-warning, .bg-success, .bg-danger {
+  padding: 15px;
+  border-radius: var(--border-radius);
+  margin: 15px 0;
+}
+
+.bg-info {
+  background-color: rgba(104, 198, 192, 0.15);
+  border-left: 4px solid var(--cnps-teal);
+}
+
+.bg-warning {
+  background-color: rgba(255, 193, 7, 0.15);
+  border-left: 4px solid #ffc107;
+}
+
+.bg-success {
+  background-color: rgba(77, 123, 67, 0.15);
+  border-left: 4px solid var(--cnps-green);
+}
+
+.bg-danger {
+  background-color: rgba(221, 88, 88, 0.15);
+  border-left: 4px solid var(--cnps-red);
 }
 
 /* Adjustments for shinyWidgets elements */
@@ -181,12 +447,105 @@ body {
   color: white !important;
 }
 
+/* Tables */
+.table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid #ddd;
+  border-radius: var(--border-radius);
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+
+.table thead th {
+  background-color: var(--cnps-light-gray);
+  border-bottom: 2px solid var(--cnps-light-green);
+  color: var(--cnps-dark-green);
+  font-weight: 600;
+  padding: 12px;
+}
+
+.table tbody td {
+  padding: 10px 12px;
+  border-top: 1px solid #eee;
+}
+
+.table tbody tr:hover {
+  background-color: rgba(77, 123, 67, 0.05);
+}
+
+/* Card-like containers */
+.card {
+  background-color: white;
+  border-radius: var(--border-radius);
+  box-shadow: var(--cnps-shadow);
+  margin-bottom: 20px;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.card-header {
+  background-color: var(--cnps-light-gray);
+  padding: 15px 20px;
+  border-bottom: 1px solid #eee;
+  font-weight: 600;
+  color: var(--cnps-dark-green);
+}
+
+.card-body {
+  padding: 20px;
+}
+
 /* Footer styling (if added) */
 .footer {
   margin-top: 40px;
-  padding-top: 15px;
+  padding: 20px 0;
   border-top: 1px solid #eee;
   text-align: center;
   color: var(--cnps-gray);
-  font-size: 12px;
+  font-size: 13px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  #sync-maps {
+    flex-direction: column !important;
+  }
+  
+  .leaflet-container {
+    height: 400px !important;
+    margin-bottom: 15px;
+  }
+}
+
+/* Animation for transitions */
+.fade {
+  transition: opacity 0.3s ease;
+}
+
+/* Proportion info styling */
+div[style*="background: #e9ecef"] {
+  background: var(--cnps-tan) !important;
+  border-radius: var(--border-radius);
+  padding: 12px !important;
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);
+}
+
+/* Well panel download */
+.well-panel-download {
+  background-color: white;
+  border: 1px solid #e3e3e3;
+  border-radius: var(--border-radius);
+  box-shadow: var(--cnps-shadow);
+  padding: 20px;
+}
+
+.well-panel-download .btn {
+  width: 100%;
+  margin-top: 15px;
 } 
