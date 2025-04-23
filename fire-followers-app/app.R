@@ -13,15 +13,19 @@ library(purrr)
 library(leafsync)
 library(tidyr)
 library(stringr)
+library(shinybusy) # Add shinybusy package for loading spinners
 
 # Disable S2 geometry if needed
 sf_use_s2(FALSE)
 
 # --- Setup DuckDB Connection -----------------------------------------------
 print("Establishing DuckDB connection...")
-con <- dbConnect(duckdb::duckdb(), "data/shiny.db", read_only = TRUE)
-# con |> dbListTables()
-# dbExecute(con, "INSTALL 'spatial'; LOAD 'spatial';")
+con <- dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+# Then copy necessary tables from the disk database
+dbExecute(con, "ATTACH 'data/shiny.db' AS source_db (READ_ONLY)")
+dbExecute(con, "CREATE TABLE gbif_frap AS SELECT * FROM source_db.gbif_frap")
+dbExecute(con, "CREATE TABLE frap AS SELECT * FROM source_db.frap")
+dbExecute(con, "DETACH source_db")
 print("DuckDB connection established and spatial extension loaded.")
 
 # --- Get Fire List Using dbplyr ----------------------------------------------
@@ -36,6 +40,12 @@ print(paste("Number of fire names retrieved:", length(fire_names)))
 # --- Define the UI -----------------------------------------------------------
 ui <- fluidPage(
   useShinyjs(), # initialize shinyjs
+  add_busy_spinner(
+    spin = "double-bounce",
+    color = "#4d7b43",
+    margins = c(50, 50),
+    position = "top-right"
+  ),
   # Custom CSS to add more padding to taxa_filter dropdown text
   includeCSS("www/cnps-style.css"),
   tags$head(
@@ -196,8 +206,8 @@ ui <- fluidPage(
       "Select Fire",
       fluidRow(
         column(
-          8,
-          offset = 2,
+          6,
+          offset = 3,
           h5("Please select a fire on the map to begin exploring data", style = "text-align: center; margin-top: 15px; color: #345930; font-weight: 500;"),
           div(
             class = "fire-map-container",
@@ -474,6 +484,8 @@ server <- function(input, output, session) {
       shinyjs::runjs("$('#tabs li a:contains(\"Biodiversity Insights\")').addClass('disabled').css({'pointer-events': 'none', 'opacity': '0.5'});")
     } else {
       shinyjs::runjs("$('#tabs li a:contains(\"Biodiversity Insights\")').removeClass('disabled').css({'pointer-events': 'auto', 'opacity': '1'});")
+      # Show spinner when fire selection changes
+      show_spinner()
     }
   })
 
@@ -666,6 +678,9 @@ server <- function(input, output, session) {
     req(input$fire_select, input$time_range)
     print(paste("filtered_gbif_data: Filtering gbif_frap data for fires =", paste(input$fire_select, collapse = ", ")))
 
+    # Show spinner for data filtering
+    show_spinner()
+
     # Get fire date from the fire_date reactive
     f_date <- fire_date()
 
@@ -714,6 +729,9 @@ server <- function(input, output, session) {
         duration = 5
       )
     }
+
+    # Hide spinner when filtering is complete
+    hide_spinner()
 
     # Return both the query, fire date, and time range for downstream use
     list(
@@ -968,6 +986,9 @@ server <- function(input, output, session) {
     selected_fire_name <- click$id
     print(paste("Fire selected from map:", selected_fire_name))
 
+    # Show spinner as this will trigger several calculations
+    show_spinner()
+
     # Extract the actual fire name if it contains "unselected_" or "selected_" prefix
     if (grepl("^(un)?selected_", selected_fire_name)) {
       selected_fire_name <- sub("^(un)?selected_", "", selected_fire_name)
@@ -988,6 +1009,9 @@ server <- function(input, output, session) {
   selected_fire <- reactive({
     req(input$fire_select)
     print("selected_fire: Retrieving fire polygons")
+
+    # Show spinner for the long calculation
+    show_spinner()
 
     # If "all" is selected, get all fires
     if ("all" %in% input$fire_select) {
@@ -1022,6 +1046,9 @@ server <- function(input, output, session) {
         ungroup()
     }
 
+    # Hide spinner once the calculation is complete
+    hide_spinner()
+
     fire_sf
   }) %>% bindCache(input$fire_select)
 
@@ -1030,11 +1057,15 @@ server <- function(input, output, session) {
     req(filtered_gbif_data())
     print("species_points: Using filtered_gbif_data to get species points")
 
+    # Show spinner for data collection
+    show_spinner()
+
     # Get filtered data
     filtered_data <- filtered_gbif_data()
 
     # If query is empty based on the flag, return NULL early
     if (filtered_data$empty) {
+      hide_spinner()
       return(NULL)
     }
 
@@ -1049,10 +1080,15 @@ server <- function(input, output, session) {
     print(paste("species_points: Number of species observations retrieved =", nrow(spp_df)))
     if (nrow(spp_df) == 0) {
       print("species_points: No species observations found!")
+      hide_spinner()
       return(NULL)
     }
     sfc_points <- st_as_sf(spp_df, coords = c("longitude", "latitude"), crs = 4326)
     print("species_points: Converted species observations to sf object.")
+
+    # Hide spinner when data collection is complete
+    hide_spinner()
+
     sfc_points
   }) %>% bindCache(input$fire_select, input$taxa_filter, input$time_range)
 
@@ -1087,6 +1123,9 @@ server <- function(input, output, session) {
   species_grid_by_period <- reactive({
     req(input$count_type, input$time_range, fire_date(), selected_fire())
     print("species_grid_by_period: Triggered.")
+
+    # Show spinner as this is a computationally intensive operation
+    show_spinner()
 
     # Get required data
     fire_sf <- selected_fire()
@@ -1158,6 +1197,9 @@ server <- function(input, output, session) {
       grid_post$count <- ifelse(grid_post$total > 0, grid_post$count / grid_post$total, 0)
     }
 
+    # Hide spinner when calculation is complete
+    hide_spinner()
+
     list(pre = grid_pre, post = grid_post, fire = fire_sf)
   }) %>% bindCache(input$fire_select, input$taxa_filter, input$count_type, input$time_range, input$relative_prop)
 
@@ -1174,6 +1216,10 @@ server <- function(input, output, session) {
   output$sync_maps_ui <- renderUI({
     # Make sure we have the necessary inputs
     req(input$fire_select, input$taxa_filter, input$count_type, input$time_range)
+
+    # Show spinner for map creation and synchronization
+    show_spinner()
+
     # Get the grid data directly, which will be cached
     data <- species_grid_by_period()
     req(data)
@@ -1285,6 +1331,10 @@ server <- function(input, output, session) {
 
     # Synchronized maps
     sync_maps <- leafsync::sync(list(pre_map, post_map))
+
+    # Hide spinner when map creation is complete
+    hide_spinner()
+
     sync_maps
   }) %>% bindCache(input$fire_select, input$taxa_filter, input$count_type, input$time_range, input$relative_prop)
 
@@ -1398,6 +1448,10 @@ server <- function(input, output, session) {
   output$richnessPlot <- renderPlot({
     req(richness_data())
     print("output$richnessPlot: Rendering species richness plot with severity breakdown.")
+
+    # Show spinner during plot generation
+    show_spinner()
+
     # 5 and 6 are just mask values I think. remake them into 'No Data'
 
     rd <- richness_data() |>
@@ -1444,6 +1498,9 @@ server <- function(input, output, session) {
         ),
         x = "Fire Severity"
       )
+
+    # Hide spinner when plot is complete
+    hide_spinner()
 
     p
   })
@@ -1546,9 +1603,12 @@ server <- function(input, output, session) {
   output$top10Plot <- renderPlot({
     req(input$count_type)
 
+    # Show spinner during plot generation
+    show_spinner()
+
     if (input$count_type == "Total Species") {
       # Create a blank plot with just text
-      ggplot() +
+      p <- ggplot() +
         annotate("text",
           x = 0.5, y = 0.5,
           label = "Please select 'Observations' from the Display Count options\nin the sidebar to view the top 10 species.",
@@ -1557,6 +1617,11 @@ server <- function(input, output, session) {
         theme_void() +
         xlim(0, 1) +
         ylim(0, 1)
+
+      # Hide spinner for this simple plot
+      hide_spinner()
+
+      return(p)
     } else {
       req(top10_data())
       print("output$top10Plot: Rendering top 10 species plot.")
@@ -1594,6 +1659,9 @@ server <- function(input, output, session) {
       if (any(nchar(levels(top10_data()$scientific_name)) > 30)) {
         p <- p + scale_x_discrete(labels = function(x) str_wrap(x, width = 25))
       }
+
+      # Hide spinner when plot is complete
+      hide_spinner()
 
       p
     }
@@ -1754,6 +1822,9 @@ server <- function(input, output, session) {
     req(fire_influence_data())
     print("output$fireInfluencePlot: Rendering fire influence plot.")
 
+    # Show spinner during plot generation
+    show_spinner()
+
     period_colors <- c("Pre-fire" = "#68C6C0", "Post-fire" = "#dd5858")
 
     p <- ggplot(
@@ -1795,6 +1866,9 @@ server <- function(input, output, session) {
       p <- p + scale_x_discrete(labels = function(x) str_wrap(x, width = 25))
     }
 
+    # Hide spinner when plot is complete
+    hide_spinner()
+
     p
   })
 
@@ -1806,12 +1880,16 @@ server <- function(input, output, session) {
     content = function(file) {
       req(filtered_gbif_data())
 
+      # Show spinner during data preparation for download
+      show_spinner()
+
       # Get the filtered data
       filtered_data <- filtered_gbif_data()
 
       # If the query is empty, show a notification
       if (filtered_data$empty) {
         showNotification("No data available to download with current filters.", type = "warning")
+        hide_spinner()
         return()
       }
 
@@ -1827,6 +1905,9 @@ server <- function(input, output, session) {
         collect()
 
       write.csv(data_to_download, file, row.names = FALSE)
+
+      # Hide spinner once download preparation is complete
+      hide_spinner()
     }
   )
 

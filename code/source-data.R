@@ -72,7 +72,7 @@ scon |> dbExecute("INSTALL spatial; LOAD spatial;")
 scon |> dbExecute("ATTACH '/home/ahill/Projects/fire-followers/data/working-db.db' AS workingdb;")
 scon |> tbl("workingdb.frap")
 # Select sample fires
-select_fires <- c("GLASS", "CZU LIGHTNING COMPLEX", "BOBCAT", "CREEK", "DOLAN")
+# select_fires <- c("GLASS", "CZU LIGHTNING COMPLEX", "BOBCAT", "CREEK", "DOLAN")
 
 # Move FRAP over
 scon |> dbExecute(
@@ -159,3 +159,38 @@ scon |>
 
 # Disconnect from the database
 scon |> dbDisconnect(shutdown = TRUE)
+
+# Huggingface db ---------------------------------------
+# Connect to a new shiny database
+
+hcon <- dbConnect(duckdb(dbdir = "data/huggingface.db"))
+hcon |> dbExecute("INSTALL spatial; LOAD spatial;")
+
+
+hcon |> dbExecute("ATTACH 'fire-followers-app/data/shiny.db' AS shinydb;")
+
+hcon |>
+  tbl("shinydb.gbif_frap") |>
+  count(geoprivacy)
+
+# Move FRAP over
+hcon |> dbExecute(
+  "CREATE TABLE huggingface.frap AS
+(
+SELECT * FROM shinydb.frap
+WHERE GIS_ACRES > 5000
+)"
+)
+
+
+# Copy GBIF points over
+hcon |> dbExecute(
+  "CREATE OR REPLACE TABLE huggingface.gbif_frap AS
+(
+SELECT * FROM shinydb.gbif_frap
+WHERE GIS_ACRES > 5000
+AND geoprivacy != 'obscured'
+)"
+)
+
+hcon |> dbDisconnect(shutdown = TRUE)
