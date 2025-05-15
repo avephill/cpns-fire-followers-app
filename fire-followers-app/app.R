@@ -14,28 +14,10 @@ library(leafsync)
 library(tidyr)
 library(stringr)
 library(shinybusy) # Add shinybusy package for loading spinners
+library(plotly) # Add plotly for interactive plots
 
 # Disable S2 geometry if needed
 sf_use_s2(FALSE)
-
-# --- Setup DuckDB Connection -----------------------------------------------
-print("Establishing DuckDB connection...")
-con <- dbConnect(duckdb::duckdb(), dbdir = ":memory:")
-# Then copy necessary tables from the disk database
-dbExecute(con, "ATTACH 'data/shiny.db' AS source_db (READ_ONLY)")
-dbExecute(con, "CREATE TABLE gbif_frap AS SELECT * FROM source_db.gbif_frap")
-dbExecute(con, "CREATE TABLE frap AS SELECT * FROM source_db.frap")
-dbExecute(con, "DETACH source_db")
-print("DuckDB connection established and spatial extension loaded.")
-
-# --- Get Fire List Using dbplyr ----------------------------------------------
-print("Retrieving distinct fire names from DuckDB...")
-fire_names <- tbl(con, "gbif_frap") %>%
-  distinct(FIRE_NAME) %>%
-  arrange(FIRE_NAME) |>
-  collect() |>
-  pull(1)
-print(paste("Number of fire names retrieved:", length(fire_names)))
 
 # --- Define the UI -----------------------------------------------------------
 ui <- fluidPage(
@@ -317,10 +299,10 @@ ui <- fluidPage(
                   )
                 )
               ),
-              choices = c("All Fires" = "all", setNames(fire_names, fire_names)),
+              choices = NULL, # Initialize with NULL choices
               selected = NULL,
               multiple = TRUE,
-              options = list(placeholder = "Search for fires")
+              options = list(placeholder = "Loading fires...")
             ),
             # Render time slider dynamically with fire alarm date in the label.
             uiOutput("time_range_ui"),
@@ -382,7 +364,7 @@ ui <- fluidPage(
                   "?",
                   tags$span(
                     class = "tooltip-text",
-                    "Shows proportion of selected taxon count to all taxa counts for a given period and fire, useful for mitigating the effects of sampling effort."
+                    "Shows proportion of selected taxon count to all taxa counts for a given period and fire, useful for mitigating the effects of sampling effort. Raw counts are susceptible to sampling bias from targeted post-fire sampling effort."
                   )
                 )
               ),
@@ -432,11 +414,11 @@ ui <- fluidPage(
               )
             ),
             tabPanel(
-              "Fire Severity Barplot",
+              "Fire Severity",
               fluidRow(
                 column(
                   8,
-                  plotOutput("richnessPlot")
+                  plotlyOutput("richnessPlot")
                 ),
                 column(
                   4,
@@ -461,12 +443,12 @@ ui <- fluidPage(
               )
             ),
             tabPanel(
-              "Top 10 Species",
-              plotOutput("top10Plot", height = "600px")
+              "Most Frequent Species",
+              plotlyOutput("top10Plot", height = "600px")
             ),
             tabPanel(
-              "Fire Influence",
-              plotOutput("fireInfluencePlot", height = "600px")
+              "Greatest Post-fire Change",
+              plotlyOutput("fireInfluencePlot", height = "600px")
             )
           )
         )
@@ -478,6 +460,41 @@ ui <- fluidPage(
 
 # --- Define the Server -------------------------------------------------------
 server <- function(input, output, session) {
+  # --- Setup DuckDB Connection -----------------------------------------------
+  print("Establishing DuckDB connection...")
+  con <- dbConnect(duckdb::duckdb(), dbdir = "data/shiny.db", read_only = TRUE)
+  # con <- dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+  # # Then copy necessary tables from the disk database
+  # dbExecute(con, "ATTACH 'data/shiny.db' AS source_db (READ_ONLY)")
+  # dbExecute(con, "CREATE TABLE gbif_frap AS SELECT * FROM source_db.gbif_frap")
+  # dbExecute(con, "CREATE TABLE frap AS SELECT * FROM source_db.frap")
+  # dbExecute(con, "DETACH source_db")
+  print("DuckDB connection established and spatial extension loaded.")
+
+  # --- Get Fire List Using dbplyr ----------------------------------------------
+  print("Retrieving distinct fire names from DuckDB...")
+  fire_names <- tbl(con, "gbif_frap") %>%
+    distinct(FIRE_NAME) %>%
+    arrange(FIRE_NAME) |>
+    collect() |>
+    pull(1)
+  print(paste("Number of fire names retrieved:", length(fire_names)))
+
+  # Update the fire selection dropdown with the retrieved fire_names
+  updateSelectizeInput(session, "fire_select",
+    choices = c("All Fires" = "all", setNames(fire_names, fire_names)),
+    selected = NULL,
+    options = list(placeholder = "Search for fires")
+  )
+
+  # Add observer to handle "All Fires" selection
+  observeEvent(input$fire_select, {
+    if ("all" %in% input$fire_select) {
+      # If "All Fires" is selected, remove other selections
+      updateSelectizeInput(session, "fire_select", selected = "all")
+    }
+  })
+
   # Observer to disable/enable the Biodiversity Insights tab based on fire selection.
   observe({
     if (is.null(input$fire_select) || length(input$fire_select) == 0) {
@@ -1445,7 +1462,7 @@ server <- function(input, output, session) {
   })
 
   # --- Render the Richness Plot -----------------------------------------------
-  output$richnessPlot <- renderPlot({
+  output$richnessPlot <- renderPlotly({
     req(richness_data())
     print("output$richnessPlot: Rendering species richness plot with severity breakdown.")
 
@@ -1463,7 +1480,14 @@ server <- function(input, output, session) {
     period_colors <- c("Pre-fire" = "#68C6C0", "Post-fire" = "#dd5858")
 
     # Create the plot with severity on x-axis and period as fill color
-    p <- ggplot(rd, aes(x = Severity, y = Count, fill = Period)) +
+    p <- ggplot(rd, aes(
+      x = Severity, y = Count, fill = Period,
+      text = paste(
+        "Count:", round(Count, 4),
+        "<br>Period:", Period,
+        "<br>Severity:", Severity
+      )
+    )) +
       geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
       scale_fill_manual(values = period_colors) +
       theme_minimal() +
@@ -1472,7 +1496,6 @@ server <- function(input, output, session) {
         axis.text.y = element_text(size = 12),
         axis.title = element_text(size = 14, face = "bold", color = "#345930"),
         plot.title = element_text(size = 16, face = "bold", color = "#345930"),
-        plot.subtitle = element_text(size = 13, color = "#6a9a61"),
         panel.grid.major = element_line(color = "#f0f0f0"),
         panel.grid.minor = element_line(color = "#f9f9f9"),
         panel.background = element_rect(fill = "white"),
@@ -1502,7 +1525,23 @@ server <- function(input, output, session) {
     # Hide spinner when plot is complete
     hide_spinner()
 
-    p
+    # Store the title and subtitle
+    plot_title <- ifelse(input$count_type == "Total Species",
+      "Species Richness by Fire Severity",
+      "Observations by Fire Severity"
+    )
+    plot_subtitle <- "Distribution across MTBS fire severity classes"
+
+    # Convert to plotly with tooltips and add subtitle
+    ggplotly(p, tooltip = "text") %>%
+      config(displayModeBar = FALSE) %>%
+      layout(
+        title = list(
+          text = paste0(plot_title, "<br><span style='font-size: 14px; color: #6a9a61;'>", plot_subtitle, "</span>"),
+          font = list(family = "Arial", size = 16)
+        ),
+        margin = list(t = 80) # Add more top margin for the subtitle
+      )
   })
 
   # --- Top 10 Species Data and Plot -----------------------------------------
@@ -1600,7 +1639,7 @@ server <- function(input, output, session) {
   })
 
   # Render the Top 10 Plot
-  output$top10Plot <- renderPlot({
+  output$top10Plot <- renderPlotly({
     req(input$count_type)
 
     # Show spinner during plot generation
@@ -1621,20 +1660,27 @@ server <- function(input, output, session) {
       # Hide spinner for this simple plot
       hide_spinner()
 
-      return(p)
+      return(ggplotly(p) %>% config(displayModeBar = FALSE))
     } else {
       req(top10_data())
       print("output$top10Plot: Rendering top 10 species plot.")
 
       period_colors <- c("Pre-fire" = "#68C6C0", "Post-fire" = "#dd5858")
 
-      p <- ggplot(top10_data(), aes(x = scientific_name, y = count, fill = period)) +
+      p <- ggplot(top10_data(), aes(
+        x = scientific_name, y = count, fill = period,
+        text = paste(
+          "Count:", round(count, 4),
+          "<br>Period:", period,
+          "<br>Species:", scientific_name
+        )
+      )) +
         geom_bar(stat = "identity", position = "dodge") +
         scale_fill_manual(values = period_colors) +
         theme_minimal() +
         theme(
-          axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
-          axis.text.y = element_text(size = 12),
+          axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+          axis.text.y = element_text(size = 10),
           axis.title = element_text(size = 14, face = "bold", color = "#345930"),
           plot.title = element_text(size = 16, face = "bold", color = "#345930"),
           plot.subtitle = element_text(size = 13, color = "#6a9a61"),
@@ -1650,9 +1696,10 @@ server <- function(input, output, session) {
         ) +
         labs(
           title = "Top 10 Observed Species",
-          # subtitle = "Most frequently observed species before and after fire",
+          subtitle = "Most frequently observed species before and after fire",
           x = "",
-          y = if (input$relative_prop) "Relative Proportion" else "Count"
+          y = if (input$relative_prop) "Relative Proportion" else "Count",
+          fill = "Period"
         )
 
       # If the names are too long, try to wrap them
@@ -1663,7 +1710,20 @@ server <- function(input, output, session) {
       # Hide spinner when plot is complete
       hide_spinner()
 
-      p
+      # Store the subtitle
+      plot_title <- "Top 10 Observed Species"
+      plot_subtitle <- "Most frequently observed species before and after fire"
+
+      # Convert to plotly with tooltips and add subtitle
+      ggplotly(p, tooltip = "text") %>%
+        config(displayModeBar = FALSE) %>%
+        layout(
+          title = list(
+            text = paste0(plot_title, "<br><span style='font-size: 14px; color: #6a9a61;'>", plot_subtitle, "</span>"),
+            font = list(family = "Arial", size = 16)
+          ),
+          margin = list(t = 80) # Add more top margin for the subtitle
+        )
     }
   })
 
@@ -1818,7 +1878,7 @@ server <- function(input, output, session) {
   })
 
   # Add new plot output (add before the server's closing brace)
-  output$fireInfluencePlot <- renderPlot({
+  output$fireInfluencePlot <- renderPlotly({
     req(fire_influence_data())
     print("output$fireInfluencePlot: Rendering fire influence plot.")
 
@@ -1832,15 +1892,20 @@ server <- function(input, output, session) {
       aes(
         x = label,
         y = count,
-        fill = factor(period, levels = c("Pre-fire", "Post-fire"))
+        fill = factor(period, levels = c("Pre-fire", "Post-fire")),
+        text = paste(
+          "Count:", round(count, 4),
+          "<br>Period:", period,
+          "<br>Species:", scientific_name
+        )
       )
     ) +
       geom_bar(stat = "identity", position = "dodge") +
       scale_fill_manual(values = period_colors) +
       theme_minimal() +
       theme(
-        axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
-        axis.text.y = element_text(size = 12),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        axis.text.y = element_text(size = 10),
         axis.title = element_text(size = 14, face = "bold", color = "#345930"),
         plot.title = element_text(size = 16, face = "bold", color = "#345930"),
         plot.subtitle = element_text(size = 13, color = "#6a9a61"),
@@ -1858,7 +1923,8 @@ server <- function(input, output, session) {
         title = "Species Most Influenced by Fire",
         subtitle = "Top 10 species with greatest pre-fire to post-fire change",
         x = "Species (with post- and pre- fire difference)",
-        y = if (input$relative_prop) "Relative Proportion" else "Count"
+        y = if (input$relative_prop) "Relative Proportion" else "Count",
+        fill = "Period"
       )
 
     # If the names are too long, try to wrap them
@@ -1869,7 +1935,20 @@ server <- function(input, output, session) {
     # Hide spinner when plot is complete
     hide_spinner()
 
-    p
+    # Store the title and subtitle
+    plot_title <- "Species Most Influenced by Fire"
+    plot_subtitle <- "Top 10 species with greatest pre-fire to post-fire change"
+
+    # Convert to plotly with tooltips and add subtitle
+    ggplotly(p, tooltip = "text") %>%
+      config(displayModeBar = FALSE) %>%
+      layout(
+        title = list(
+          text = paste0(plot_title, "<br><span style='font-size: 14px; color: #6a9a61;'>", plot_subtitle, "</span>"),
+          font = list(family = "Arial", size = 16)
+        ),
+        margin = list(t = 80) # Add more top margin for the subtitle
+      )
   })
 
   # Add new download handler for filtered data
