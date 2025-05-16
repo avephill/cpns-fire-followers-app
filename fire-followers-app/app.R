@@ -1561,14 +1561,14 @@ server <- function(input, output, session) {
     pre_fire <- if (start_date < fire_date) {
       filtered_data$query %>%
         filter(observed_on < fire_date) %>%
-        group_by(scientific_name) %>%
+        group_by(scientific_name, common_name) %>% # Include common_name
         summarize(
           count = if (input$count_type == "Total Species") n_distinct(scientific_name) else n(),
           .groups = "drop"
         ) %>%
         collect()
     } else {
-      data.frame(scientific_name = character(0), count = numeric(0))
+      data.frame(scientific_name = character(0), common_name = character(0), count = numeric(0))
     }
     pre_fire$period <- "Pre-fire"
 
@@ -1576,14 +1576,14 @@ server <- function(input, output, session) {
     post_fire <- if (end_date >= fire_date) {
       filtered_data$query %>%
         filter(observed_on >= fire_date) %>%
-        group_by(scientific_name) %>%
+        group_by(scientific_name, common_name) %>% # Include common_name
         summarize(
           count = if (input$count_type == "Total Species") n_distinct(scientific_name) else n(),
           .groups = "drop"
         ) %>%
         collect()
     } else {
-      data.frame(scientific_name = character(0), count = numeric(0))
+      data.frame(scientific_name = character(0), common_name = character(0), count = numeric(0))
     }
     post_fire$period <- "Post-fire"
 
@@ -1594,6 +1594,7 @@ server <- function(input, output, session) {
     if (nrow(combined) == 0) {
       return(data.frame(
         scientific_name = character(0),
+        common_name = character(0),
         count = numeric(0),
         period = character(0)
       ))
@@ -1619,21 +1620,31 @@ server <- function(input, output, session) {
     # For normalized counts, we use the sum of proportions for ranking
     # For raw counts, we use the sum of observations
     top_species <- combined %>%
-      group_by(scientific_name) %>%
-      summarize(total_count = sum(count)) %>%
+      group_by(scientific_name, common_name) %>% # Include common_name in grouping
+      summarize(total_count = sum(count), .groups = "drop") %>%
       arrange(desc(total_count)) %>%
-      slice_head(n = 10) %>%
-      pull(scientific_name)
+      slice_head(n = 10)
+
+    top_scientific_names <- top_species %>% pull(scientific_name)
 
     # Filter for only top 10 species and ensure both periods are represented
     result <- combined %>%
-      filter(scientific_name %in% top_species) %>%
-      complete(scientific_name = top_species, period = c("Pre-fire", "Post-fire"), fill = list(count = 0))
+      filter(scientific_name %in% top_scientific_names) %>%
+      complete(scientific_name = top_scientific_names, period = c("Pre-fire", "Post-fire"), fill = list(count = 0))
+
+    # Ensure we have common names for all entries (handling NAs from complete())
+    result <- result %>%
+      group_by(scientific_name) %>%
+      mutate(common_name = ifelse(is.na(common_name),
+        first(common_name[!is.na(common_name)]),
+        common_name
+      )) %>%
+      ungroup()
 
     # Reorder factors for plotting
     result %>%
       mutate(
-        scientific_name = factor(scientific_name, levels = top_species),
+        scientific_name = factor(scientific_name, levels = top_scientific_names),
         period = factor(period, levels = c("Pre-fire", "Post-fire"))
       )
   })
@@ -1667,12 +1678,22 @@ server <- function(input, output, session) {
 
       period_colors <- c("Pre-fire" = "#68C6C0", "Post-fire" = "#dd5858")
 
-      p <- ggplot(top10_data(), aes(
+      # Prepare the data with common names
+      plot_data <- top10_data()
+
+      # Create custom axis labels
+      x_labels <- setNames(
+        paste0("<i>", plot_data$scientific_name, "</i><br><span style='font-size:10px;color:#888888'>", plot_data$common_name, "</span>"),
+        plot_data$scientific_name
+      )
+
+      p <- ggplot(plot_data, aes(
         x = scientific_name, y = count, fill = period,
         text = paste(
           "Count:", round(count, 4),
           "<br>Period:", period,
-          "<br>Species:", scientific_name
+          "<br>Species:", scientific_name,
+          "<br>Common Name:", common_name
         )
       )) +
         geom_bar(stat = "identity", position = "dodge") +
@@ -1703,7 +1724,7 @@ server <- function(input, output, session) {
         )
 
       # If the names are too long, try to wrap them
-      if (any(nchar(levels(top10_data()$scientific_name)) > 30)) {
+      if (any(nchar(levels(plot_data$scientific_name)) > 30)) {
         p <- p + scale_x_discrete(labels = function(x) str_wrap(x, width = 25))
       }
 
@@ -1715,7 +1736,7 @@ server <- function(input, output, session) {
       plot_subtitle <- "Most frequently observed species before and after fire"
 
       # Convert to plotly with tooltips and add subtitle
-      ggplotly(p, tooltip = "text") %>%
+      p_plotly <- ggplotly(p, tooltip = "text") %>%
         config(displayModeBar = FALSE) %>%
         layout(
           title = list(
@@ -1723,6 +1744,16 @@ server <- function(input, output, session) {
             font = list(family = "Arial", size = 16)
           ),
           margin = list(t = 80) # Add more top margin for the subtitle
+        )
+
+      # Update x-axis labels with italicized scientific names and smaller common names
+      p_plotly %>%
+        layout(
+          xaxis = list(
+            tickmode = "array",
+            tickvals = seq_along(levels(plot_data$scientific_name)),
+            ticktext = unique(x_labels[levels(plot_data$scientific_name)])
+          )
         )
     }
   })
@@ -1764,7 +1795,7 @@ server <- function(input, output, session) {
     # Get pre-fire and post-fire counts
     pre_fire <- filtered_data$query %>%
       filter(observed_on < fire_date) %>%
-      group_by(scientific_name) %>%
+      group_by(scientific_name, common_name) %>% # Include common_name
       summarize(
         pre_count = if (input$count_type == "Total Species") n_distinct(scientific_name) else n(),
         .groups = "drop"
@@ -1773,7 +1804,7 @@ server <- function(input, output, session) {
 
     post_fire <- filtered_data$query %>%
       filter(observed_on >= fire_date) %>%
-      group_by(scientific_name) %>%
+      group_by(scientific_name, common_name) %>% # Include common_name
       summarize(
         post_count = if (input$count_type == "Total Species") n_distinct(scientific_name) else n(),
         .groups = "drop"
@@ -1781,7 +1812,7 @@ server <- function(input, output, session) {
       collect()
 
     # Combine and calculate ratios
-    combined <- full_join(pre_fire, post_fire, by = "scientific_name") %>%
+    combined <- full_join(pre_fire, post_fire, by = c("scientific_name", "common_name")) %>%
       mutate(
         pre_count = replace_na(pre_count, 0),
         post_count = replace_na(post_count, 0)
@@ -1793,6 +1824,7 @@ server <- function(input, output, session) {
     if (nrow(combined) == 0) {
       return(data.frame(
         scientific_name = character(0),
+        common_name = character(0),
         pre_count = numeric(0),
         post_count = numeric(0),
         ratio = numeric(0),
@@ -1834,7 +1866,7 @@ server <- function(input, output, session) {
     # Create labels and reshape for plotting
     combined <- combined %>%
       mutate(
-        # Create label combining name and ratio
+        # Create label combining name and ratio (but we'll replace this in the plot)
         label = if (input$relative_prop) {
           sprintf("%s\n(+%.3f)", scientific_name, diff)
         } else {
@@ -1887,8 +1919,29 @@ server <- function(input, output, session) {
 
     period_colors <- c("Pre-fire" = "#68C6C0", "Post-fire" = "#dd5858")
 
+    # Prepare the data
+    plot_data <- fire_influence_data()
+
+    # Create custom axis labels with scientific names in italics and common names smaller and gray
+    label_map <- plot_data %>%
+      select(label, scientific_name, common_name) %>%
+      distinct()
+
+    # Extract change frequency values from the label format: "species\n(+n)"
+    label_map$change_freq <- gsub(".*\\((.*)\\).*", "\\1", label_map$label)
+
+    # Create the mapping for x-axis labels that includes both common name and change frequency
+    x_labels <- setNames(
+      paste0(
+        "<i>", label_map$scientific_name, "</i> ", label_map$change_freq,
+        "<br><span style='font-size:10px;color:#888888'>",
+        label_map$common_name, "</span>"
+      ),
+      label_map$label
+    )
+
     p <- ggplot(
-      fire_influence_data(),
+      plot_data,
       aes(
         x = label,
         y = count,
@@ -1896,7 +1949,8 @@ server <- function(input, output, session) {
         text = paste(
           "Count:", round(count, 4),
           "<br>Period:", period,
-          "<br>Species:", scientific_name
+          "<br>Species:", scientific_name,
+          "<br>Common Name:", common_name
         )
       )
     ) +
@@ -1928,7 +1982,7 @@ server <- function(input, output, session) {
       )
 
     # If the names are too long, try to wrap them
-    if (any(nchar(levels(fire_influence_data()$label)) > 30)) {
+    if (any(nchar(levels(plot_data$label)) > 30)) {
       p <- p + scale_x_discrete(labels = function(x) str_wrap(x, width = 25))
     }
 
@@ -1940,7 +1994,7 @@ server <- function(input, output, session) {
     plot_subtitle <- "Top 10 species with greatest pre-fire to post-fire change"
 
     # Convert to plotly with tooltips and add subtitle
-    ggplotly(p, tooltip = "text") %>%
+    p_plotly <- ggplotly(p, tooltip = "text") %>%
       config(displayModeBar = FALSE) %>%
       layout(
         title = list(
@@ -1948,6 +2002,16 @@ server <- function(input, output, session) {
           font = list(family = "Arial", size = 16)
         ),
         margin = list(t = 80) # Add more top margin for the subtitle
+      )
+
+    # Update x-axis labels with italicized scientific names and common names
+    p_plotly %>%
+      layout(
+        xaxis = list(
+          tickmode = "array",
+          tickvals = seq_along(levels(plot_data$label)),
+          ticktext = x_labels[levels(plot_data$label)]
+        )
       )
   })
 
