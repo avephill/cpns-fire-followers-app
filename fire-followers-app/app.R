@@ -1661,7 +1661,7 @@ server <- function(input, output, session) {
       p <- ggplot() +
         annotate("text",
           x = 0.5, y = 0.5,
-          label = "Please select 'Observations' from the Display Count options\nin the sidebar to view the top 10 species.",
+          label = "Please select 'Observations' from the \n sidebar to view the top 10 species.",
           size = 6
         ) +
         theme_void() +
@@ -1911,108 +1911,128 @@ server <- function(input, output, session) {
 
   # Add new plot output (add before the server's closing brace)
   output$fireInfluencePlot <- renderPlotly({
-    req(fire_influence_data())
-    print("output$fireInfluencePlot: Rendering fire influence plot.")
+    req(input$count_type)
 
     # Show spinner during plot generation
     show_spinner()
 
-    period_colors <- c("Pre-fire" = "#68C6C0", "Post-fire" = "#dd5858")
+    if (input$count_type == "Total Species") {
+      # Create a blank plot with just text
+      p <- ggplot() +
+        annotate("text",
+          x = 0.5, y = 0.5,
+          label = "Please select 'Observations' from the \n sidebar to view the species most influenced by fire.",
+          size = 6
+        ) +
+        theme_void() +
+        xlim(0, 1) +
+        ylim(0, 1)
 
-    # Prepare the data
-    plot_data <- fire_influence_data()
+      # Hide spinner for this simple plot
+      hide_spinner()
 
-    # Create custom axis labels with scientific names in italics and common names smaller and gray
-    label_map <- plot_data %>%
-      select(label, scientific_name, common_name) %>%
-      distinct()
+      return(ggplotly(p) %>% config(displayModeBar = FALSE))
+    } else {
+      req(fire_influence_data())
+      print("output$fireInfluencePlot: Rendering fire influence plot.")
 
-    # Extract change frequency values from the label format: "species\n(+n)"
-    label_map$change_freq <- gsub(".*\\((.*)\\).*", "\\1", label_map$label)
+      period_colors <- c("Pre-fire" = "#68C6C0", "Post-fire" = "#dd5858")
 
-    # Create the mapping for x-axis labels that includes both common name and change frequency
-    x_labels <- setNames(
-      paste0(
-        "<i>", label_map$scientific_name, "</i> ", label_map$change_freq,
-        "<br><span style='font-size:10px;color:#888888'>",
-        label_map$common_name, "</span>"
-      ),
-      label_map$label
-    )
+      # Prepare the data
+      plot_data <- fire_influence_data()
 
-    p <- ggplot(
-      plot_data,
-      aes(
-        x = label,
-        y = count,
-        fill = factor(period, levels = c("Pre-fire", "Post-fire")),
-        text = paste(
-          "Count:", round(count, 4),
-          "<br>Period:", period,
-          "<br>Species:", scientific_name,
-          "<br>Common Name:", common_name
-        )
-      )
-    ) +
-      geom_bar(stat = "identity", position = "dodge") +
-      scale_fill_manual(values = period_colors) +
-      theme_minimal() +
-      theme(
-        axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
-        axis.text.y = element_text(size = 10),
-        axis.title = element_text(size = 14, face = "bold", color = "#345930"),
-        plot.title = element_text(size = 16, face = "bold", color = "#345930"),
-        plot.subtitle = element_text(size = 13, color = "#6a9a61"),
-        panel.grid.major = element_line(color = "#f0f0f0"),
-        panel.grid.minor = element_line(color = "#f9f9f9"),
-        panel.background = element_rect(fill = "white"),
-        plot.background = element_rect(fill = "white", color = NA),
-        legend.title = element_blank(),
-        legend.position = "top",
-        legend.background = element_rect(fill = "white", color = NA),
-        legend.key = element_rect(fill = "white", color = NA),
-        plot.margin = unit(c(1, 1, 1, 1), "cm")
-      ) +
-      labs(
-        title = "Species Most Influenced by Fire",
-        subtitle = "Top 10 species with greatest pre-fire to post-fire change",
-        x = "Species (with post- and pre- fire difference)",
-        y = if (input$relative_prop) "Relative Proportion" else "Count",
-        fill = "Period"
-      )
+      # Create custom axis labels with scientific names in italics and common names smaller and gray
+      label_map <- plot_data %>%
+        select(label, scientific_name, common_name) %>%
+        distinct()
 
-    # If the names are too long, try to wrap them
-    if (any(nchar(levels(plot_data$label)) > 30)) {
-      p <- p + scale_x_discrete(labels = function(x) str_wrap(x, width = 25))
-    }
+      # Extract change frequency values from the label format: "species\n(+n)"
+      label_map$change_freq <- gsub(".*\\((.*)\\).*", "\\1", label_map$label)
 
-    # Hide spinner when plot is complete
-    hide_spinner()
-
-    # Store the title and subtitle
-    plot_title <- "Species Most Influenced by Fire"
-    plot_subtitle <- "Top 10 species with greatest pre-fire to post-fire change"
-
-    # Convert to plotly with tooltips and add subtitle
-    p_plotly <- ggplotly(p, tooltip = "text") %>%
-      config(displayModeBar = FALSE) %>%
-      layout(
-        title = list(
-          text = paste0(plot_title, "<br><span style='font-size: 14px; color: #6a9a61;'>", plot_subtitle, "</span>"),
-          font = list(family = "Arial", size = 16)
+      # Create the mapping for x-axis labels that includes both common name and change frequency
+      x_labels <- setNames(
+        paste0(
+          "<i>", label_map$scientific_name, "</i> ", label_map$change_freq,
+          "<br><span style='font-size:10px;color:#888888'>",
+          label_map$common_name, "</span>"
         ),
-        margin = list(t = 80) # Add more top margin for the subtitle
+        label_map$label
       )
 
-    # Update x-axis labels with italicized scientific names and common names
-    p_plotly %>%
-      layout(
-        xaxis = list(
-          tickmode = "array",
-          tickvals = seq_along(levels(plot_data$label)),
-          ticktext = x_labels[levels(plot_data$label)]
+      p <- ggplot(
+        plot_data,
+        aes(
+          x = label,
+          y = count,
+          fill = factor(period, levels = c("Pre-fire", "Post-fire")),
+          text = paste(
+            "Count:", round(count, 4),
+            "<br>Period:", period,
+            "<br>Species:", scientific_name,
+            "<br>Common Name:", common_name
+          )
         )
-      )
+      ) +
+        geom_bar(stat = "identity", position = "dodge") +
+        scale_fill_manual(values = period_colors) +
+        theme_minimal() +
+        theme(
+          axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+          axis.text.y = element_text(size = 10),
+          axis.title = element_text(size = 14, face = "bold", color = "#345930"),
+          plot.title = element_text(size = 16, face = "bold", color = "#345930"),
+          plot.subtitle = element_text(size = 13, color = "#6a9a61"),
+          panel.grid.major = element_line(color = "#f0f0f0"),
+          panel.grid.minor = element_line(color = "#f9f9f9"),
+          panel.background = element_rect(fill = "white"),
+          plot.background = element_rect(fill = "white", color = NA),
+          legend.title = element_blank(),
+          legend.position = "top",
+          legend.background = element_rect(fill = "white", color = NA),
+          legend.key = element_rect(fill = "white", color = NA),
+          plot.margin = unit(c(1, 1, 1, 1), "cm")
+        ) +
+        labs(
+          title = "Species Most Influenced by Fire",
+          subtitle = "Top 10 species with greatest pre-fire to post-fire change",
+          x = "Species (with post- and pre- fire difference)",
+          y = if (input$relative_prop) "Relative Proportion" else "Count",
+          fill = "Period"
+        )
+
+      # If the names are too long, try to wrap them
+      if (any(nchar(levels(plot_data$label)) > 30)) {
+        p <- p + scale_x_discrete(labels = function(x) str_wrap(x, width = 25))
+      }
+
+      # Hide spinner when plot is complete
+      hide_spinner()
+
+      # Store the title and subtitle
+      plot_title <- "Species Most Influenced by Fire"
+      plot_subtitle <- "Top 10 species with greatest pre-fire to post-fire change"
+
+      # Convert to plotly with tooltips and add subtitle
+      p_plotly <- ggplotly(p, tooltip = "text") %>%
+        config(displayModeBar = FALSE) %>%
+        layout(
+          title = list(
+            text = paste0(plot_title, "<br><span style='font-size: 14px; color: #6a9a61;'>", plot_subtitle, "</span>"),
+            font = list(family = "Arial", size = 16)
+          ),
+          margin = list(t = 80) # Add more top margin for the subtitle
+        )
+
+      # Update x-axis labels with italicized scientific names and common names
+      p_plotly %>%
+        layout(
+          xaxis = list(
+            tickmode = "array",
+            tickvals = seq_along(levels(plot_data$label)),
+            ticktext = x_labels[levels(plot_data$label)]
+          )
+        )
+    }
   })
 
   # Add new download handler for filtered data
