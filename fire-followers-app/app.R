@@ -39,6 +39,14 @@ ui <- fluidPage(
       .well.sidebar {
         background-color: white;
       }
+      /* Improve the appearance of taxa filter dropdown options */
+      .selectize-dropdown-content .option {
+        padding: 10px 8px !important;
+        vertical-align: top !important;
+      }
+      .selectize-dropdown-content .option * {
+        vertical-align: top !important;
+      }
       /* Force maps to be side by side */
       #sync-maps {
         display: flex !important;
@@ -321,19 +329,20 @@ ui <- fluidPage(
                   "?",
                   tags$span(
                     class = "tooltip-text",
-                    "You can search and filter by class, family, genus, or species"
+                    "You can search and filter by class, family, genus, or species name and common name"
                   )
                 )
               ),
               choices = NULL,
               options = list(
-                placeholder = "Search by class, family, genus, or species",
+                placeholder = "Search by class, family, genus, species, or common name",
+                searchField = "value", # Changed to just search the value field which now contains both scientific and common name
                 render = I('{
                    option: function(item, escape) {
-                     return "<div style=\'padding: 0px 8px\'>" + item.label + "</div>";
+                     return "<div style=\'padding: 6px 8px\'>" + item.label + "</div>";
                    },
                    item: function(item, escape) {
-                     return "<div style=\'padding: 0px 8px\'>" + item.label + "</div>";
+                     return "<div style=\'padding: 6px 8px\'>" + item.label + "</div>";
                    }
                  }')
               ),
@@ -576,10 +585,14 @@ server <- function(input, output, session) {
         distinct(taxon_genus_name) %>%
         collect() %>%
         pull(taxon_genus_name)
-      species <- tbl(con, "gbif_frap") %>%
-        distinct(taxon_species_name) %>%
-        collect() %>%
-        pull(taxon_species_name)
+      # For species, get both the species name and common name
+      species_df <- tbl(con, "gbif_frap") %>%
+        # Standardize common_name capitalization to prevent duplicates
+        mutate(common_name = str_to_lower(common_name)) %>%
+        distinct(taxon_species_name, common_name) %>%
+        collect() |>
+        # The str_to_sentence doesn't work in dbplyr, so we do it here
+        mutate(common_name = str_to_sentence(common_name))
     } else {
       # For specific fires, get taxon names from selected fires
       classes <- tbl(con, "gbif_frap") %>%
@@ -597,30 +610,82 @@ server <- function(input, output, session) {
         distinct(taxon_genus_name) %>%
         collect() %>%
         pull(taxon_genus_name)
-      species <- tbl(con, "gbif_frap") %>%
+      # For species, get both the species name and common name
+      species_df <- tbl(con, "gbif_frap") %>%
         filter(FIRE_NAME %in% input$fire_select) %>%
-        distinct(taxon_species_name) %>%
-        collect() %>%
-        pull(taxon_species_name)
+        # Standardize common_name capitalization to prevent duplicates
+        mutate(common_name = str_to_lower(common_name)) %>%
+        distinct(taxon_species_name, common_name) %>%
+        collect() |>
+        # The str_to_sentence doesn't work in dbplyr, so we do it here
+        mutate(common_name = str_to_sentence(common_name))
     }
 
     # Remove NA values
     classes <- classes[!is.na(classes)]
     families <- families[!is.na(families)]
     genera <- genera[!is.na(genera)]
-    species <- species[!is.na(species)]
 
+    # Process species data - remove rows with NA species names
+    species_df <- species_df[!is.na(species_df$taxon_species_name), ]
+
+    # Create species choices
+    species_choices <- lapply(1:nrow(species_df), function(i) {
+      sci_name <- species_df$taxon_species_name[i]
+      common <- species_df$common_name[i]
+
+      # Create the display text - scientific name plus common name if available
+      display_text <- if (!is.na(common) && common != "") {
+        paste0(
+          "<i>", sci_name, "</i> <span style='color:#6a9a61; font-style: normal;'>Species</span>",
+          "<br><span style='font-size:12px; color:#888;'>", common, "</span>"
+        )
+      } else {
+        paste0("<i>", sci_name, "</i> <span style='color:#6a9a61; font-style: normal;'>Species</span>")
+      }
+
+      # For value, add common name to make it searchable but keep the database value intact
+      search_value <- if (!is.na(common) && common != "") {
+        # Create an internal data structure that stores both scientific and common name
+        # Format: species|scientific_name:::common_name
+        # The ::: separator won't interfere with the | we use to split it for filtering
+        paste0("species|", sci_name, ":::", common)
+      } else {
+        paste0("species|", sci_name)
+      }
+
+      setNames(search_value, display_text)
+    })
+
+    # Combine into a single vector
+    species_choices <- unlist(species_choices)
+
+    # Create the main choices list
     choices <- c(
       setNames("all", "All taxa"),
       setNames(paste0("class|", classes), paste0(classes, " <span style='color:#6a9a61; font-style: italic;'>Class</span>")),
       setNames(paste0("family|", families), paste0(families, " <span style='color:#6a9a61; font-style: italic;'>Family</span>")),
       setNames(paste0("genus|", genera), paste0(genera, " <span style='color:#6a9a61; font-style: italic;'>Genus</span>")),
-      setNames(paste0("species|", species), paste0(species, " <span style='color:#6a9a61; font-style: italic;'>Species</span>"))
+      species_choices
     )
+
+    # Update the dropdown with new options to enable searching by common name
     updateSelectizeInput(session, "taxa_filter",
       choices = choices,
       selected = "all",
-      server = TRUE
+      server = TRUE,
+      options = list(
+        placeholder = "Search by class, family, genus, species, or common name",
+        searchField = "value", # Changed to just search the value field which now contains both scientific and common name
+        render = I('{
+          option: function(item, escape) {
+            return "<div>" + item.label + "</div>";
+          },
+          item: function(item, escape) {
+            return "<div>" + item.label + "</div>";
+          }
+        }')
+      )
     )
   })
 
@@ -722,6 +787,11 @@ server <- function(input, output, session) {
       split_val <- strsplit(input$taxa_filter, "\\|")[[1]]
       level <- split_val[1]
       value <- split_val[2]
+
+      # Extract just the scientific name if there's a common name appended with :::
+      if (grepl(":::", value)) {
+        value <- strsplit(value, ":::")[[1]][1]
+      }
 
       query <- switch(level,
         "class" = query %>% filter(taxon_class_name == value),
@@ -1254,13 +1324,13 @@ server <- function(input, output, session) {
     # Pre-fire map
     pre_label <- if (input$count_type == "Total Observations") {
       if (input$relative_prop) {
-        ~ paste("Pre-fire Relative Proportion:", count)
+        ~ paste("Pre-fire Relative Frequency:", count)
       } else {
         ~ paste("Pre-fire Obs. Count:", count)
       }
     } else {
       if (input$relative_prop) {
-        ~ paste("Pre-fire Relative Proportion:", count)
+        ~ paste("Pre-fire Relative Frequency:", count)
       } else {
         ~ paste("Pre-fire Species Count:", count)
       }
@@ -1295,13 +1365,13 @@ server <- function(input, output, session) {
     # Post-fire map
     post_label <- if (input$count_type == "Total Observations") {
       if (input$relative_prop) {
-        ~ paste("Post-fire Relative Proportion:", count)
+        ~ paste("Post-fire Relative Frequency:", count)
       } else {
         ~ paste("Post-fire Obs. Count:", count)
       }
     } else {
       if (input$relative_prop) {
-        ~ paste("Post-fire Relative Proportion:", count)
+        ~ paste("Post-fire Relative Frequency:", count)
       } else {
         ~ paste("Post-fire Species Count:", count)
       }
@@ -1338,7 +1408,7 @@ server <- function(input, output, session) {
         values = if (input$relative_prop) all_counts else log1p(all_counts),
         labFormat = labelFormat(transform = if (input$relative_prop) identity else function(x) round(expm1(x), 0)),
         title = if (input$relative_prop) {
-          "Relative Proportion"
+          "Relative Frequency"
         } else if (input$count_type == "Total Observations") {
           "Observation Count"
         } else {
@@ -1513,7 +1583,7 @@ server <- function(input, output, session) {
         ),
         subtitle = "Distribution across MTBS fire severity classes",
         y = ifelse(input$relative_prop,
-          "Relative Proportion",
+          "Relative Frequency",
           ifelse(input$count_type == "Total Species",
             "Number of Unique Species",
             "Number of Observations"
@@ -1717,9 +1787,9 @@ server <- function(input, output, session) {
         ) +
         labs(
           title = "Top 10 Observed Species",
-          subtitle = "Most frequently observed species before and after fire",
+          subtitle = "Most frequently observed species before + after fire",
           x = "",
-          y = if (input$relative_prop) "Relative Proportion" else "Count",
+          y = if (input$relative_prop) "Relative Frequency" else "Count",
           fill = "Period"
         )
 
@@ -1733,7 +1803,7 @@ server <- function(input, output, session) {
 
       # Store the subtitle
       plot_title <- "Top 10 Observed Species"
-      plot_subtitle <- "Most frequently observed species before and after fire"
+      plot_subtitle <- "Most frequently observed species before + after fire"
 
       # Convert to plotly with tooltips and add subtitle
       p_plotly <- ggplotly(p, tooltip = "text") %>%
@@ -1941,13 +2011,39 @@ server <- function(input, output, session) {
       # Prepare the data
       plot_data <- fire_influence_data()
 
+      # Calculate change frequencies from labels and sort species by change_freq in descending order
+      species_totals <- plot_data %>%
+        group_by(scientific_name) %>%
+        summarize(
+          total_count = sum(count),
+          change_freq = first(gsub(".*\\((.*)\\).*", "\\1", label))
+        ) %>%
+        # Sort by change_freq in descending order (removing the + sign for numeric comparison)
+        mutate(change_numeric = as.numeric(gsub("\\+", "", change_freq))) %>%
+        arrange(desc(change_numeric))
+
+      # Reorder scientific names by change frequency in descending order
+      plot_data$scientific_name <- factor(
+        plot_data$scientific_name,
+        levels = species_totals$scientific_name
+      )
+
       # Create custom axis labels with scientific names in italics and common names smaller and gray
       label_map <- plot_data %>%
-        select(label, scientific_name, common_name) %>%
+        select(scientific_name, common_name) %>%
         distinct()
 
-      # Extract change frequency values from the label format: "species\n(+n)"
-      label_map$change_freq <- gsub(".*\\((.*)\\).*", "\\1", label_map$label)
+      # Extract change frequency values from the original labels
+      change_freq <- plot_data %>%
+        select(scientific_name, label) %>%
+        distinct() %>%
+        mutate(change_freq = gsub(".*\\((.*)\\).*", "\\1", label))
+
+      # Merge change frequency back with label_map
+      label_map <- left_join(label_map,
+        change_freq %>% select(scientific_name, change_freq),
+        by = "scientific_name"
+      )
 
       # Create the mapping for x-axis labels that includes both common name and change frequency
       x_labels <- setNames(
@@ -1956,13 +2052,13 @@ server <- function(input, output, session) {
           "<br><span style='font-size:10px;color:#888888'>",
           label_map$common_name, "</span>"
         ),
-        label_map$label
+        label_map$scientific_name
       )
 
       p <- ggplot(
         plot_data,
         aes(
-          x = label,
+          x = scientific_name,
           y = count,
           fill = factor(period, levels = c("Pre-fire", "Post-fire")),
           text = paste(
@@ -1996,12 +2092,12 @@ server <- function(input, output, session) {
           title = "Species Most Influenced by Fire",
           subtitle = "Top 10 species with greatest pre-fire to post-fire change",
           x = "Species (with post- and pre- fire difference)",
-          y = if (input$relative_prop) "Relative Proportion" else "Count",
+          y = if (input$relative_prop) "Relative Frequency" else "Count",
           fill = "Period"
         )
 
       # If the names are too long, try to wrap them
-      if (any(nchar(levels(plot_data$label)) > 30)) {
+      if (any(nchar(levels(plot_data$scientific_name)) > 30)) {
         p <- p + scale_x_discrete(labels = function(x) str_wrap(x, width = 25))
       }
 
@@ -2028,8 +2124,8 @@ server <- function(input, output, session) {
         layout(
           xaxis = list(
             tickmode = "array",
-            tickvals = seq_along(levels(plot_data$label)),
-            ticktext = x_labels[levels(plot_data$label)]
+            tickvals = seq_along(levels(plot_data$scientific_name)),
+            ticktext = x_labels[levels(plot_data$scientific_name)]
           )
         )
     }
