@@ -383,7 +383,7 @@ ui <- fluidPage(
                   inputId = "relative_prop",
                   label = "Normalized",
                   labelWidth = "100px",
-                  value = FALSE,
+                  value = TRUE,
                   size = "small"
                 )
               )
@@ -1316,9 +1316,9 @@ server <- function(input, output, session) {
     # Create shared color palette
     all_counts <- c(data$pre$count, data$post$count)
     pal <- if (input$relative_prop) {
-      colorNumeric(c("#f7f7f7", "#1a4b7c"), domain = all_counts)
+      colorNumeric(viridis::viridis(256), domain = all_counts)
     } else {
-      colorNumeric(c("#f7f7f7", "#1a4b7c"), domain = log1p(all_counts))
+      colorNumeric(viridis::viridis(256), domain = log1p(all_counts))
     }
 
     # Pre-fire map
