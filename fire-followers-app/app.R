@@ -60,18 +60,21 @@ ui <- fluidPage(
       /* Style for help tooltips */
       .help-tooltip {
         display: inline-block;
-        width: 16px;
-        height: 16px;
-        line-height: 16px;
+        width: 18px;
+        height: 18px;
+        line-height: 18px;
         text-align: center;
         border-radius: 50%;
-        background-color: #e0e0e0;
-        color: #666;
-        font-size: 12px;
-        margin-left: 5px;
-        cursor: help;
+        background-color: #007bff;
+        color: white;
+        font-size: 14px;
+        font-weight: bold;
+        margin-left: 8px;
+        cursor: pointer;
         position: relative;
         top: -2px;
+        transition: all 0.2s ease;
+        box-shadow: 0 2px 4px rgba(0, 123, 255, 0.3);
       }
       /* Reduce space between tabs */
       .tabbable > .nav > li > a {
@@ -106,7 +109,9 @@ ui <- fluidPage(
         margin-top: 10px;
       }
       .help-tooltip:hover {
-        background-color: #d0d0d0;
+        background-color: #0056b3;
+        transform: scale(1.1);
+        box-shadow: 0 4px 8px rgba(0, 123, 255, 0.4);
       }
       .tooltip-text {
         visibility: hidden;
@@ -116,15 +121,19 @@ ui <- fluidPage(
         text-align: center;
         border-radius: 6px;
         padding: 8px;
-        position: absolute;
-        z-index: 9999;
-        bottom: 125%;
+        position: fixed;
+        z-index: 999999;
+        bottom: auto;
+        top: 50%;
         left: 50%;
-        margin-left: -100px;
+        transform: translate(-50%, -50%);
+        margin-left: 0;
         opacity: 0;
         transition: opacity 0.3s;
         font-size: 14px;
         font-style: normal;
+        pointer-events: none;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
       }
       .tooltip-text::after {
         content: '';
@@ -312,7 +321,7 @@ ui <- fluidPage(
                 style = "margin-bottom: 10px; font-size: 14px; color: #666; font-style: italic; text-align: center;",
                 HTML("
                   <div style='display: inline-block; vertical-align: middle; margin: 0 8px;'>
-                    <div style='border-bottom: 1px solid #666; padding-bottom: 2px;'>Selected taxa count<sub>t</sub></div>
+                    <div style='border-bottom: 1px solid #666; padding-bottom: 2px;'>Selected taxon count<sub>t</sub></div>
                     <div style='padding-top: 2px;'>Total count<sub>t</sub></div>
                   </div>
                   <br>
@@ -1820,7 +1829,7 @@ server <- function(input, output, session) {
     post_total <- total_post_all_taxa()
 
     # Determine what type of counts we're showing
-    count_type_text <- if (input$count_type == "Total Species") "total species" else "total observations"
+    count_type_text <- if (input$count_type == "Total Species") "species" else "observations"
 
     # Create HTML output with the total values
     HTML(paste0(
