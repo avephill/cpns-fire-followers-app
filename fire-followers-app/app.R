@@ -229,6 +229,33 @@ ui <- fluidPage(
             class = "card", style = "margin-top: 25px;",
             div(
               class = "card-header",
+              h3("Dataset Information & Limitations", style = "margin-top: 0;")
+            ),
+            div(
+              class = "card-body",
+              h5("Observation Collection Methodology", style = "color: #345930; font-weight: 600;"),
+              tags$ul(
+                tags$li("No systematic sampling beyond general guidance to observe plants in fire scar"),
+                tags$li("Data collection was opportunistic and varied by participant interest and effort")
+              ),
+              h5("Data Cleanup & Processing", style = "color: #345930; font-weight: 600; margin-top: 20px;"),
+              tags$ul(
+                tags$li("Only ", tags$a(href = "https://help.inaturalist.org/en/support/solutions/articles/151000169936-what-is-the-data-quality-assessment-and-how-do-observations-qualify-to-become-research-grade-", "Research Grade", target = "_blank"), " observations were included in the analysis"),
+                tags$li("Only included observations from 2020 California fires with perimeters > 5000 acres"),
+                tags$li("Observations with obscured coordinates or privacy restrictions were excluded")
+              ),
+              h5("Key Limitations & Biases", style = "color: #345930; font-weight: 600; margin-top: 20px;"),
+              tags$ul(
+                tags$li("Post-fire sampling effort could be inflated by the targeted campaign"),
+                tags$li("Species detection varies by observer expertise and identification methods"),
+                tags$li("Geographic coverage is uneven across fire scars and regions")
+              )
+            )
+          ),
+          div(
+            class = "card", style = "margin-top: 25px;",
+            div(
+              class = "card-header",
               h3("Data Sources", style = "margin-top: 0;")
             ),
             div(
