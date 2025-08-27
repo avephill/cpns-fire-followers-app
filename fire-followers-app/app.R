@@ -15,6 +15,7 @@ library(tidyr)
 library(stringr)
 library(shinybusy) # Add shinybusy package for loading spinners
 library(plotly) # Add plotly for interactive plots
+library(leaflegend) # Add leaflegend package for better legend control
 
 # Disable S2 geometry if needed
 sf_use_s2(FALSE)
@@ -383,7 +384,7 @@ ui <- fluidPage(
                   inputId = "relative_prop",
                   label = "Normalized",
                   labelWidth = "100px",
-                  value = TRUE,
+                  value = FALSE,
                   size = "small"
                 )
               )
@@ -672,7 +673,8 @@ server <- function(input, output, session) {
     # Update the dropdown with new options to enable searching by common name
     updateSelectizeInput(session, "taxa_filter",
       choices = choices,
-      selected = "all",
+      # selected = "all",
+      selected = "class|Liliopsida",
       server = TRUE,
       options = list(
         placeholder = "Search by class, family, genus, species, or common name",
@@ -687,6 +689,16 @@ server <- function(input, output, session) {
         }')
       )
     )
+  })
+
+  # Observer to automatically switch relative_prop to TRUE when a specific taxon is selected
+  observe({
+    req(input$taxa_filter)
+
+    # If user selects anything other than "All taxa", switch relative_prop to TRUE
+    if (input$taxa_filter != "all") {
+      updateSwitchInput(session, "relative_prop", value = TRUE)
+    }
   })
 
   # --- Reactive: Get all fires (one record per fire, using the largest fire by GIS_ACRES).
@@ -1335,8 +1347,35 @@ server <- function(input, output, session) {
         ~ paste("Pre-fire Species Count:", count)
       }
     }
-    pre_map <- leaflet() %>%
+    pre_map <- leaflet(options = leafletOptions(zoomControl = FALSE)) %>%
       addProviderTiles("CartoDB.Positron") %>%
+      # Add taxa filter banner in top left
+      addControl(
+        html = {
+          # Extract the display name for the selected taxon
+          taxon_display <- if (input$taxa_filter == "all") {
+            "All taxa"
+          } else if (grepl("^class\\|", input$taxa_filter)) {
+            gsub("^class\\|", "", input$taxa_filter)
+          } else if (grepl("^family\\|", input$taxa_filter)) {
+            gsub("^family\\|", "", input$taxa_filter)
+          } else if (grepl("^genus\\|", input$taxa_filter)) {
+            gsub("^genus\\|", "", input$taxa_filter)
+          } else if (grepl("^species\\|", input$taxa_filter)) {
+            # Extract just the scientific name if there's a common name
+            species_part <- gsub("^species\\|", "", input$taxa_filter)
+            if (grepl(":::", species_part)) {
+              gsub(":::.+$", "", species_part)
+            } else {
+              species_part
+            }
+          } else {
+            input$taxa_filter
+          }
+          paste0("<h4 style='text-align:center; margin:0; background-color:#6a9a61; color:white; padding:8px; border-radius:6px; box-shadow:0 0 5px rgba(0,0,0,0.3); font-size:14px;'>", taxon_display, "</h4>")
+        },
+        position = "topleft"
+      ) %>%
       addControl(
         html = "<h4 style='text-align:center; margin:0; background-color:white; padding:8px; border-radius:6px; box-shadow:0 0 5px rgba(0,0,0,0.2); color: #345930;'>Pre-Fire</h4>",
         position = "topright"
@@ -1376,7 +1415,7 @@ server <- function(input, output, session) {
         ~ paste("Post-fire Species Count:", count)
       }
     }
-    post_map <- leaflet() %>%
+    post_map <- leaflet(options = leafletOptions(zoomControl = FALSE)) %>%
       addProviderTiles("CartoDB.Positron") %>%
       addControl(
         html = "<h4 style='text-align:center; margin:0; background-color:white; padding:8px; border-radius:6px; box-shadow:0 0 5px rgba(0,0,0,0.2); color: #345930;'>Post-Fire</h4>",
@@ -1402,17 +1441,26 @@ server <- function(input, output, session) {
           bringToFront = TRUE
         )
       ) %>%
-      addLegend(
+      addLegendNumeric(
         position = "bottomright",
         pal = pal,
         values = if (input$relative_prop) all_counts else log1p(all_counts),
-        labFormat = labelFormat(transform = if (input$relative_prop) identity else function(x) round(expm1(x), 0)),
         title = if (input$relative_prop) {
           "Relative Frequency"
         } else if (input$count_type == "Total Observations") {
           "Observation Count"
         } else {
           "Species Count"
+        },
+        orientation = "horizontal",
+        shape = "rect",
+        width = 100,
+        height = 20,
+        bins = 7,
+        numberFormat = if (input$relative_prop) {
+          function(x) prettyNum(x, format = "f", big.mark = ",", digits = 3, scientific = FALSE)
+        } else {
+          function(x) prettyNum(round(expm1(x), 0), format = "f", big.mark = ",", scientific = FALSE)
         }
       )
 
@@ -2089,7 +2137,7 @@ server <- function(input, output, session) {
           plot.margin = unit(c(1, 1, 1, 1), "cm")
         ) +
         labs(
-          title = "Species Most Influenced by Fire",
+          title = "Species with Greatest Change in Observation Frequency Post-Fire",
           subtitle = "Top 10 species with greatest pre-fire to post-fire change",
           x = "Species (with post- and pre- fire difference)",
           y = if (input$relative_prop) "Relative Frequency" else "Count",
@@ -2105,7 +2153,7 @@ server <- function(input, output, session) {
       hide_spinner()
 
       # Store the title and subtitle
-      plot_title <- "Species Most Influenced by Fire"
+      plot_title <- "Species with Greatest Change in Observation Frequency Post-Fire"
       plot_subtitle <- "Top 10 species with greatest pre-fire to post-fire change"
 
       # Convert to plotly with tooltips and add subtitle
