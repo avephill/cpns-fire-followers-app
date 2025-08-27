@@ -1,0 +1,84 @@
+<div class="card">
+  <div class="card-body">
+    <p>The CNPS Fire Followers Explorer is an interactive application designed to explore plant biodiversity
+      patterns before and after wildfire events in California using data from the CNPS California Fire Followers 2020 iNaturalist project. This tool allows users to visualize and analyze
+      how plant communities respond to fires of different severities and how species composition changes over time.</p>
+    <p>
+      This application was developed as a joint collaboration between the
+      <strong>California Native Plant Society</strong> and
+      <strong>Avery Hill</strong> at the California Academy of Sciences.
+    </p>
+  </div>
+</div>
+
+<div class="card" style="margin-top: 25px;">
+  <div class="card-header">
+    <h3>Dataset Information & Limitations</h3>
+  </div>
+  <div class="card-body">
+    <h5 style="color: #345930; font-weight: 600;">Observation Collection Methodology</h5>
+    <ul>
+      <li>No systematic sampling beyond general guidance to observe plants in fire scar</li>
+      <li>Data collection was opportunistic and varied by participant interest and effort</li>
+    </ul>
+    <h5 style="color: #345930; font-weight: 600; margin-top: 20px;">Data Cleanup & Processing</h5>
+    <ul>
+      <li>Only <a href="https://help.inaturalist.org/en/support/solutions/articles/151000169936-what-is-the-data-quality-assessment-and-how-do-observations-qualify-to-become-research-grade-" target="_blank">Research Grade</a> observations were included in the analysis</li>
+      <li>Only included observations from 2020 California fires with perimeters > 5000 acres</li>
+      <li>Observations with obscured coordinates or privacy restrictions were excluded</li>
+    </ul>
+    <h5 style="color: #345930; font-weight: 600; margin-top: 20px;">Key Limitations & Biases</h5>
+    <ul>
+      <li>Post-fire sampling effort could be inflated by the targeted campaign</li>
+      <li>Species detection varies by observer expertise and identification methods</li>
+      <li>Geographic coverage is uneven across fire scars and regions</li>
+    </ul>
+  </div>
+</div>
+
+<div class="card" style="margin-top: 25px;">
+  <div class="card-header">
+    <h3>Data Sources</h3>
+  </div>
+  <div class="card-body">
+    <ul>
+      <li>
+        Observation data was accessed from the iNaturalist project:
+        <a href="https://www.inaturalist.org/projects/california-fire-followers-2020-data-management" target="_blank">California Fire Followers 2020</a>
+      </li>
+      <li>
+        Fire perimeter data came from the California Department of Forestry and Fire Protection:
+        <a href="https://www.fire.ca.gov/what-we-do/fire-resource-assessment-program/fire-perimeters" target="_blank">Fire Resource Assessment Program</a>
+      </li>
+      <li>
+        Fire severity data came from the Monitoring Trends in Burn Severity (MTBS) project:
+        <a href="https://www.mtbs.gov/index.php/project-overview" target="_blank">MTBS Project Overview</a>
+      </li>
+    </ul>
+  </div>
+</div>
+
+<div class="card" style="margin-top: 25px;">
+  <div class="card-header">
+    <h3>Technical Details</h3>
+  </div>
+  <div class="card-body">
+    <p>This application was built using R Shiny, an open-source framework for building interactive web
+      applications. It uses DuckDB for efficient data storage and processing, and various spatial libraries
+      for visualization and analysis.</p>
+    <p><a href="https://github.com/avephill/cpns-fire-followers-app" target="_blank">View project on GitHub</a></p>
+  </div>
+</div>
+
+<div style="margin-top: 30px; text-align: center;" class="footer">
+  <p style="color: #666; font-style: italic;">
+    Created: <span id="creation-date"></span>
+  </p>
+</div>
+
+<script>
+document.getElementById('creation-date').textContent = new Date().toLocaleDateString('en-US', { 
+  year: 'numeric', 
+  month: 'long' 
+});
+</script>
