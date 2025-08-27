@@ -309,6 +309,17 @@ ui <- fluidPage(
                 )
               ),
               tags$div(
+                style = "margin-bottom: 10px; font-size: 14px; color: #666; font-style: italic; text-align: center;",
+                HTML("
+                  <div style='display: inline-block; vertical-align: middle; margin: 0 8px;'>
+                    <div style='border-bottom: 1px solid #666; padding-bottom: 2px;'>Selected taxa count<sub>t</sub></div>
+                    <div style='padding-top: 2px;'>Total count<sub>t</sub></div>
+                  </div>
+                  <br>
+                  where t = pre-fire or post-fire
+                ")
+              ),
+              tags$div(
                 style = "display: flex; justify-content: center;",
                 switchInput(
                   inputId = "relative_prop",
@@ -1815,8 +1826,8 @@ server <- function(input, output, session) {
     HTML(paste0(
       "<div style='font-weight: 600; margin-bottom: 8px; color: #345930;'>Denominator totals:</div>",
       "<div style='display: grid; gap: 5px;'>",
-      "<div>Pre-fire: <span style='font-weight: 500; color: #68C6C0;'>", pre_total, " ", count_type_text, "</span></div>",
-      "<div>Post-fire: <span style='font-weight: 500; color: #dd5858;'>", post_total, " ", count_type_text, "</span></div>",
+      "<div>Total count<sub>t=pre-fire</sub>: <span style='font-weight: 500; color: #68C6C0;'>", pre_total, " ", count_type_text, "</span></div>",
+      "<div>Total count<sub>t=post-fire</sub>: <span style='font-weight: 500; color: #dd5858;'>", post_total, " ", count_type_text, "</span></div>",
       "</div>"
     ))
   })
