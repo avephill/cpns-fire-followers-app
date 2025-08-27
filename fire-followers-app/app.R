@@ -441,42 +441,48 @@ server <- function(input, output, session) {
       shinyjs::runjs("$('#tabs li a:contains(\"Biodiversity Insights\")').addClass('disabled').css({'pointer-events': 'none', 'opacity': '0.5'});")
     } else {
       shinyjs::runjs("$('#tabs li a:contains(\"Biodiversity Insights\")').removeClass('disabled').css({'pointer-events': 'auto', 'opacity': '1'});")
-      # Show spinner when fire selection changes
-      show_spinner()
+      # Don't show spinner here - let individual reactive elements handle their own loading states
     }
   })
 
-  # Render the time range slider UI using the alarm date from the first selected fire.
+  # Create a reactive time range slider that updates with fire selection
   output$time_range_ui <- renderUI({
     req(input$fire_select)
-    # Get all selected fires
+
+    # Get fire info to calculate dates
     selected_fire_names <- input$fire_select
     fire_info <- con %>%
       tbl("gbif_frap") %>%
       filter(FIRE_NAME %in% selected_fire_names) %>%
-      # For each fire, get the record with the largest GIS_ACRES
       group_by(FIRE_NAME) %>%
       slice_max(GIS_ACRES, with_ties = FALSE) %>%
       collect()
-    if (nrow(fire_info) == 0) {
-      return(NULL)
+
+    # Calculate time range based on fire dates
+    if (nrow(fire_info) > 0) {
+      fire_dates <- fire_info %>%
+        select(FIRE_NAME, ALARM_DATE, GIS_ACRES) %>%
+        distinct() %>%
+        mutate(ALARM_DATE = as.Date(ALARM_DATE)) %>%
+        arrange(ALARM_DATE)
+
+      alarm_date <- fire_dates$ALARM_DATE[1]
+      new_start <- alarm_date - (365 * 4)
+      new_end <- alarm_date + (365 * 4)
+
+      # Format fire dates for display
+      date_strings <- paste0("<div style='margin-top: 3px;'><i>", fire_dates$FIRE_NAME, "</i>: ", fire_dates$ALARM_DATE, "</div>")
+      dates_html <- paste(date_strings, collapse = "")
+
+      fire_dates_display <- paste0(
+        "<div style='font-weight: 600; margin-bottom: 5px; color: #345930;'>Fire alarm dates:</div>",
+        dates_html
+      )
+    } else {
+      new_start <- as.Date("2015-01-01")
+      new_end <- Sys.Date()
+      fire_dates_display <- "No fire information available"
     }
-
-    # Get all fire names and their alarm dates (now using the largest fire records)
-    fire_dates <- fire_info %>%
-      select(FIRE_NAME, ALARM_DATE, GIS_ACRES) %>%
-      distinct() %>%
-      mutate(ALARM_DATE = as.Date(ALARM_DATE)) %>%
-      arrange(ALARM_DATE)
-
-    # Format for display
-    date_strings <- paste0("<div style='margin-top: 3px;'><i>", fire_dates$FIRE_NAME, "</i>: ", fire_dates$ALARM_DATE, "</div>")
-    dates_html <- paste(date_strings, collapse = "")
-
-    # Use the first fire's date for slider range calculation
-    alarm_date <- fire_dates$ALARM_DATE[1]
-    new_start <- alarm_date - (365 * 4)
-    new_end <- alarm_date + (365 * 4)
 
     tagList(
       sliderInput("time_range",
@@ -488,14 +494,14 @@ server <- function(input, output, session) {
         timeFormat = "%Y-%m"
       ),
       tags$div(
+        id = "fire_dates_info",
         style = "margin-top: 8px; padding: 8px; background: #f5f1e8; border-radius: 6px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);",
-        HTML(paste0(
-          "<div style='font-weight: 600; margin-bottom: 5px; color: #345930;'>Fire alarm dates:</div>",
-          dates_html
-        ))
+        HTML(fire_dates_display)
       )
     )
   })
+
+  # No need for separate observer - time_range_ui output handles everything reactively
 
   # Update the taxa_filter selectizeInput with combined choices.
   observe({
@@ -529,17 +535,14 @@ server <- function(input, output, session) {
       classes <- tbl(con, "gbif_frap") %>%
         filter(FIRE_NAME %in% input$fire_select) %>%
         distinct(taxon_class_name) %>%
-        collect() %>%
         pull(taxon_class_name)
       families <- tbl(con, "gbif_frap") %>%
         filter(FIRE_NAME %in% input$fire_select) %>%
         distinct(taxon_family_name) %>%
-        collect() %>%
         pull(taxon_family_name)
       genera <- tbl(con, "gbif_frap") %>%
         filter(FIRE_NAME %in% input$fire_select) %>%
         distinct(taxon_genus_name) %>%
-        collect() %>%
         pull(taxon_genus_name)
       # For species, get both the species name and common name
       species_df <- tbl(con, "gbif_frap") %>%
@@ -600,11 +603,23 @@ server <- function(input, output, session) {
       species_choices
     )
 
+    # Get current selection to preserve it if possible
+    current_selection <- isolate(input$taxa_filter)
+
+    # Only update if the choices have actually changed
+    # This prevents unnecessary updates that could trigger the relative_prop observer
+    if (is.null(current_selection) || current_selection == "") {
+      # First time loading, set default
+      selected_value <- "class|Liliopsida"
+    } else {
+      # Try to preserve current selection if it's still valid
+      selected_value <- if (current_selection %in% choices) current_selection else "class|Liliopsida"
+    }
+
     # Update the dropdown with new options to enable searching by common name
     updateSelectizeInput(session, "taxa_filter",
       choices = choices,
-      # selected = "all",
-      selected = "class|Liliopsida",
+      selected = selected_value,
       server = TRUE,
       options = list(
         placeholder = "Search by class, family, genus, species, or common name",
@@ -622,9 +637,8 @@ server <- function(input, output, session) {
   })
 
   # Observer to automatically switch relative_prop to TRUE when a specific taxon is selected
-  observe({
-    req(input$taxa_filter)
-
+  # Only trigger when the user actually changes the taxa filter, not when it's programmatically updated
+  observeEvent(input$taxa_filter, {
     # If user selects anything other than "All taxa", switch relative_prop to TRUE
     if (input$taxa_filter != "all") {
       updateSwitchInput(session, "relative_prop", value = TRUE)
@@ -702,8 +716,7 @@ server <- function(input, output, session) {
     req(input$fire_select, input$time_range)
     print(paste("filtered_gbif_data: Filtering gbif_frap data for fires =", paste(input$fire_select, collapse = ", ")))
 
-    # Show spinner for data filtering
-    show_spinner()
+    # Don't show spinner here - let individual outputs handle their own loading states
 
     # Get fire date from the fire_date reactive
     f_date <- fire_date()
@@ -759,8 +772,7 @@ server <- function(input, output, session) {
       )
     }
 
-    # Hide spinner when filtering is complete
-    hide_spinner()
+    # Don't need to hide spinner since we're not showing it here
 
     # Return both the query, fire date, and time range for downstream use
     list(
@@ -1015,8 +1027,7 @@ server <- function(input, output, session) {
     selected_fire_name <- click$id
     print(paste("Fire selected from map:", selected_fire_name))
 
-    # Show spinner as this will trigger several calculations
-    show_spinner()
+    # Don't show spinner here - let individual outputs handle their own loading states
 
     # Extract the actual fire name if it contains "unselected_" or "selected_" prefix
     if (grepl("^(un)?selected_", selected_fire_name)) {
@@ -1039,8 +1050,7 @@ server <- function(input, output, session) {
     req(input$fire_select)
     print("selected_fire: Retrieving fire polygons")
 
-    # Show spinner for the long calculation
-    show_spinner()
+    # Don't show spinner here - let individual outputs handle their own loading states
 
     # If "all" is selected, get all fires
     if ("all" %in% input$fire_select) {
@@ -1075,8 +1085,7 @@ server <- function(input, output, session) {
         ungroup()
     }
 
-    # Hide spinner once the calculation is complete
-    hide_spinner()
+    # Don't need to hide spinner since we're not showing it here
 
     fire_sf
   }) %>% bindCache(input$fire_select)
@@ -1086,15 +1095,13 @@ server <- function(input, output, session) {
     req(filtered_gbif_data())
     print("species_points: Using filtered_gbif_data to get species points")
 
-    # Show spinner for data collection
-    show_spinner()
+    # Don't show spinner here - let individual outputs handle their own loading states
 
     # Get filtered data
     filtered_data <- filtered_gbif_data()
 
     # If query is empty based on the flag, return NULL early
     if (filtered_data$empty) {
-      hide_spinner()
       return(NULL)
     }
 
@@ -1109,14 +1116,12 @@ server <- function(input, output, session) {
     print(paste("species_points: Number of species observations retrieved =", nrow(spp_df)))
     if (nrow(spp_df) == 0) {
       print("species_points: No species observations found!")
-      hide_spinner()
       return(NULL)
     }
     sfc_points <- st_as_sf(spp_df, coords = c("longitude", "latitude"), crs = 4326)
     print("species_points: Converted species observations to sf object.")
 
-    # Hide spinner when data collection is complete
-    hide_spinner()
+    # Don't need to hide spinner since we're not showing it here
 
     sfc_points
   }) %>% bindCache(input$fire_select, input$taxa_filter, input$time_range)
@@ -1153,8 +1158,7 @@ server <- function(input, output, session) {
     req(input$count_type, input$time_range, fire_date(), selected_fire())
     print("species_grid_by_period: Triggered.")
 
-    # Show spinner as this is a computationally intensive operation
-    show_spinner()
+    # Don't show spinner here - let individual outputs handle their own loading states
 
     # Get required data
     fire_sf <- selected_fire()
@@ -1226,20 +1230,10 @@ server <- function(input, output, session) {
       grid_post$count <- ifelse(grid_post$total > 0, grid_post$count / grid_post$total, 0)
     }
 
-    # Hide spinner when calculation is complete
-    hide_spinner()
+    # Don't need to hide spinner since we're not showing it here
 
     list(pre = grid_pre, post = grid_post, fire = fire_sf)
   }) %>% bindCache(input$fire_select, input$taxa_filter, input$count_type, input$time_range, input$relative_prop)
-
-  # Create a shared color palette reactive
-  shared_palette <- reactive({
-    req(species_grid_by_period())
-    data <- species_grid_by_period()
-    # Combine counts from both periods to get full range
-    all_counts <- c(data$pre$count, data$post$count)
-    colorNumeric("YlOrRd", domain = log1p(all_counts))
-  })
 
   # Render pre-fire and post-fire maps with synced view.
   output$sync_maps_ui <- renderUI({
@@ -1249,11 +1243,11 @@ server <- function(input, output, session) {
     # Show spinner for map creation and synchronization
     show_spinner()
 
+    print("Creating and syncing maps")
+
     # Get the grid data directly, which will be cached
     data <- species_grid_by_period()
     req(data)
-
-    print("Creating and syncing maps")
 
     # Create shared color palette
     all_counts <- c(data$pre$count, data$post$count)
