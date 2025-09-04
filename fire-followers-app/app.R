@@ -659,8 +659,9 @@ server <- function(input, output, session) {
   })
 
   # --- Reactive: Get all fires (one record per fire, using the largest fire by GIS_ACRES).
-  all_fires <- reactive({
-    print("all_fires: Retrieving all fire data.")
+  # Create a memoised version of the all_fires function
+  get_all_fires_memoised <- memoise(function(fire_names, con) {
+    print("get_all_fires_memoised: Retrieving all fire data from cache or database.")
     tryCatch(
       {
         fires_info <- tbl(con, "frap") %>%
@@ -672,7 +673,7 @@ server <- function(input, output, session) {
 
         if (nrow(fires_info) == 0) {
           # Handle case where no fires are found
-          print("all_fires: No fires found matching the criteria")
+          print("get_all_fires_memoised: No fires found matching the criteria")
           return(NULL)
         }
 
@@ -683,7 +684,7 @@ server <- function(input, output, session) {
 
         # Ensure we have a valid sf object
         if (!is(fires_sf, "sf") || nrow(fires_sf) == 0) {
-          print("all_fires: Failed to create a valid sf object")
+          print("get_all_fires_memoised: Failed to create a valid sf object")
           return(NULL)
         }
 
@@ -691,10 +692,15 @@ server <- function(input, output, session) {
       },
       error = function(e) {
         # Log the error
-        print(paste("Error in all_fires reactive:", e$message))
+        print(paste("Error in get_all_fires_memoised:", e$message))
         NULL
       }
     )
+  }, cache = cache_filesystem(CACHE))
+
+  all_fires <- reactive({
+    print("all_fires: Calling memoised function.")
+    get_all_fires_memoised(fire_names, con)
   }) %>% bindCache(fire_names) # Cache based on fire_names since they don't change in a session
 
   # New reactive to get fire date based on selected fires
