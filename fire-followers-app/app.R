@@ -16,9 +16,11 @@ library(stringr)
 library(shinybusy) # Add shinybusy package for loading spinners
 library(plotly) # Add plotly for interactive plots
 library(leaflegend) # Add leaflegend package for better legend control
+library(memoise)
 
 # Disable S2 geometry if needed
 sf_use_s2(FALSE)
+CACHE <- "/tmp/Rtmp-urban"
 
 # --- Define the UI -----------------------------------------------------------
 ui <- fluidPage(
@@ -58,24 +60,21 @@ ui <- fluidPage(
         flex: 1;
       }
       /* Style for help tooltips */
-      .help-tooltip {
-        display: inline-block;
-        width: 18px;
-        height: 18px;
-        line-height: 18px;
-        text-align: center;
-        border-radius: 50%;
-        background-color: #007bff;
-        color: white;
-        font-size: 14px;
-        font-weight: bold;
-        margin-left: 8px;
-        cursor: pointer;
-        position: relative;
-        top: -2px;
-        transition: all 0.2s ease;
-        box-shadow: 0 2px 4px rgba(0, 123, 255, 0.3);
-      }
+              .help-tooltip {
+          display: inline-block;
+          width: 16px;
+          height: 16px;
+          line-height: 16px;
+          text-align: center;
+          border-radius: 50%;
+          background-color: #e0e0e0;
+          color: #666;
+          font-size: 12px;
+          margin-left: 5px;
+          cursor: help;
+          position: relative;
+          top: -2px;
+        }
       /* Reduce space between tabs */
       .tabbable > .nav > li > a {
         padding-top: 5px;
@@ -108,33 +107,27 @@ ui <- fluidPage(
         width: 100%;
         margin-top: 10px;
       }
-      .help-tooltip:hover {
-        background-color: #0056b3;
-        transform: scale(1.1);
-        box-shadow: 0 4px 8px rgba(0, 123, 255, 0.4);
-      }
-      .tooltip-text {
-        visibility: hidden;
-        width: 200px;
-        background-color: #555;
-        color: #fff;
-        text-align: center;
-        border-radius: 6px;
-        padding: 8px;
-        position: fixed;
-        z-index: 999999;
-        bottom: auto;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        margin-left: 0;
-        opacity: 0;
-        transition: opacity 0.3s;
-        font-size: 14px;
-        font-style: normal;
-        pointer-events: none;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-      }
+              .help-tooltip:hover {
+          background-color: #d0d0d0;
+        }
+              .tooltip-text {
+          visibility: hidden;
+          width: 200px;
+          background-color: #555;
+          color: #fff;
+          text-align: center;
+          border-radius: 6px;
+          padding: 8px;
+          position: absolute;
+          z-index: 9999;
+          bottom: 125%;
+          left: 50%;
+          margin-left: -100px;
+          opacity: 0;
+          transition: opacity 0.3s;
+          font-size: 14px;
+          font-style: normal;
+        }
       .tooltip-text::after {
         content: '';
         position: absolute;
